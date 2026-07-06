@@ -430,11 +430,13 @@ function runDLCInject(){
 	alert(`DLC injected.\n\nQuests installed: ${questResult.installed}\nQuests already owned: ${questResult.alreadyOwned}\nBonus content bytes applied: ${bonusApplied}`);
 }
 
-// Only carries over: name, funds, hunter rank (reset to 8), play time (reset
-// to 0), and appearance/color - equipment/items/history are NOT ported (see
-// MHXX_PORT.js for why). Uses whichever format is picked in the top-bar
-// "port_format_dropdown", same pattern as the region dropdown + Export save -
-// no separate popup/dialog needed.
+// Carries over: name, funds, appearance/color, equipment box, palico
+// equipment box, item box (best-effort item ID remap, see MHXX_PORT.js), and
+// monster hunt/capture log. Hunter rank always resets to 8 and play time
+// always resets to 0 (confirmed mandatory, matching a real transfer). Uses
+// whichever format is picked in the top-bar "port_format_dropdown", same
+// pattern as the region dropdown + Export save - no separate popup/dialog
+// needed.
 function portSlot(slot){
 	var targetFormat = document.getElementById("port_format_dropdown").value;
 
@@ -444,8 +446,10 @@ function portSlot(slot){
 	saveByteArray([out], "system");
 
 	alert(`Ported "${save.save_slots[slot].name}" to ${PORT_FORMAT_NAMES[targetFormat]}.\n\n` +
-		`Only carried over: name, funds, hunter rank (reset to 8), play time (reset to 0), and appearance/color.\n` +
-		`Equipment, items, and quest/monster history are NOT ported - recreate your loadout manually after porting.\n` +
+		`Carried over: name, funds, appearance/color, equipment box, palico equipment box, item box, and monster hunt/capture log.\n` +
+		`Hunter rank is reset to 8 and play time is reset to 0 (this always happens on a real transfer too).\n` +
+		`Item box IDs use a best-effort remap (~89% exact match against a real sample) since MHXX reorganized its item catalog - double check your item box after porting.\n` +
+		`Decorations, key items, full Palico roster/stats, and quest progress are NOT ported.\n` +
 		`No DLC is included either, same as a real transfer - inject DLC for the new game separately afterward.`);
 }
 
