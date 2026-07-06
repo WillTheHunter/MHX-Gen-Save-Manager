@@ -1,0 +1,293 @@
+@font-face {
+    font-family: 'Rodin';
+    src: url('SCE-PS3 Rodin LATIN Regular.otf');
+}    
+
+html, body{
+	overscroll-behavior: none;
+}
+
+body{
+	font-family: 'Rodin';
+	background-color: #2A2A2A;
+	min-height: 100vh;
+	margin: 0;
+	color: #ffffff;
+}
+
+.main{
+	display: flex;
+	justify-content: center;
+}
+
+.save-table{
+	top: 10px;
+	position: relative;
+	display: flex;
+	flex-direction: column;
+	justify-content: space-between;
+	gap: 48px;
+	flex-wrap: wrap;
+}
+
+.save-table table{
+	border-collapse: separate;
+	border-spacing: 6px 15px;
+	background-color: #f2eac1;
+	color: #040400;
+	border: 3px solid #3a0902;
+	border-radius: 15px;
+	background-image: url(border.png);
+	background-repeat: no-repeat;
+	background-size: 100% 100%;
+	padding: 4px 17px;
+}
+
+.slot-title{
+	color: #027b76;
+	float: left;
+	margin-left: 16px;
+}
+
+.slot-text{
+	float: right;
+	margin-right: 16px;
+}
+
+.slot-name{
+	text-align: center;
+	color: #d8e8e6;
+	width: 360px;
+	font-weight: none;
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 360 45'%3E %3Cpolygon points='18,2 18,17 11,10 11,9' fill='%23caae57'/%3E %3C/svg%3E"),
+	url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 360 45'%3E %3Cpolygon points='18,27 18,42 11,35 11,34' fill='%23caae57'/%3E %3C/svg%3E"),
+	url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 360 45'%3E %3Cpolygon points='341,2 348,9 348,10 341,17' fill='%23caae57'/%3E %3C/svg%3E"),
+	url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 360 45'%3E %3Cpolygon points='341,27 348,34 348,35 341,42' fill='%23caae57'/%3E %3C/svg%3E"),
+	url("data:image/svg+xml,%3Csvg%20height%3D%2745%27%20width%3D%27360%27%20xmlns%3D%27http%3A//www.w3.org/2000/svg%27%3E%3Cpolygon%20points%3D%270%2C0%20359%2C0%20359%2C8%20350%2C8%20350%2C18%20359%2C18%20359%2C26%20350%2C26%20350%2C36%20359%2C36%20359%2C44%200%2C44%200%2C36%209%2C36%209%2C26%200%2C26%200%2C18%209%2C18%209%2C8%200%2C8%27%20style%3D%27fill%3A%23027b76%27%2F%3E%3C/svg%3E");
+	
+	background-repeat: no-repeat, no repeat, no-repeat, no repeat;
+	background-size: 100% 100%, 100% 100%, 100% 100%, 100% 100%;
+}
+
+.slot-gender{
+	width: 212px;
+	height: 45px;
+	background-image: url("data:image/svg+xml,%0A%20%20%20%20%20%20%20%20%3Csvg%20height%3D%2245%22%20width%3D%22221%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%3E%0A%20%20%20%20%20%20%20%20%20%20%20%20%3Cpolygon%20points%3D%220%2C39%205%2C39%205%2C42%20206%2C42%20206%2C39%20211%2C39%20211%2C44%200%2C44%22%20style%3D%22fill%3A%235d5345%22%2F%3E%0A%20%20%20%20%20%20%20%20%3C%2Fsvg%3E%0A%20%20%20%20");
+	background-repeat: no-repeat;
+	background-size: 100% 100%;
+}
+
+.slot-hr{
+	width: 212px;
+	height: 45px;
+	background-image: url("data:image/svg+xml,%0A%20%20%20%20%20%20%20%20%3Csvg%20height%3D%2245%22%20width%3D%22221%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%3E%0A%20%20%20%20%20%20%20%20%20%20%20%20%3Cpolygon%20points%3D%220%2C39%205%2C39%205%2C42%20206%2C42%20206%2C39%20211%2C39%20211%2C44%200%2C44%22%20style%3D%22fill%3A%235d5345%22%2F%3E%0A%20%20%20%20%20%20%20%20%3C%2Fsvg%3E%0A%20%20%20%20");
+	background-repeat: no-repeat;
+	background-size: 100% 100%;
+}
+
+.slot-funds{
+	width: 360px;
+	height: 45px;
+	background-image: url("data:image/svg+xml,%0A%20%20%20%20%20%20%20%20%3Csvg%20height%3D%2245%22%20width%3D%22369%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%3E%0A%20%20%20%20%20%20%20%20%20%20%20%20%3Cpolygon%20points%3D%220%2C39%205%2C39%205%2C42%20354%2C42%20354%2C39%20359%2C39%20359%2C44%200%2C44%22%20style%3D%22fill%3A%235d5345%22%2F%3E%0A%20%20%20%20%20%20%20%20%3C%2Fsvg%3E%0A%20%20%20%20");
+	background-repeat: no-repeat;
+	background-size: 100% 100%;
+}
+
+.slot-time{
+	width: 430px;
+	height: 45px;
+	background-image: url("data:image/svg+xml,%0A%20%20%20%20%20%20%20%20%3Csvg%20height%3D%2245%22%20width%3D%22439%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%3E%0A%20%20%20%20%20%20%20%20%20%20%20%20%3Cpolygon%20points%3D%220%2C39%205%2C39%205%2C42%20424%2C42%20424%2C39%20429%2C39%20429%2C44%200%2C44%22%20style%3D%22fill%3A%235d5345%22%2F%3E%0A%20%20%20%20%20%20%20%20%3C%2Fsvg%3E%0A%20%20%20%20");
+	background-repeat: no-repeat;
+	background-size: 100% 100%;
+}
+
+.save-slot, .empty-slot{
+	flex: 1 1 auto;
+	margin: 0px;
+}
+
+.empty-slot {
+	position: relative;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	height: 147px;
+	min-width: 848px;
+	background-color: #615e4e;
+	color: #000000;
+	font-size: 32px;
+	border: 3px solid #180402;
+	border-radius: 15px;
+	background-image: url("border-no-slot.png"),
+	url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20viewBox%3D%22230%20104%20359%205%22%20width%3D%22359%22%20height%3D%225%22%3E%3Cpolygon%20points%3D%22230%2C104%20235%2C104%20235%2C107%20584%2C107%20584%2C104%20589%2C104%20589%2C109%20230%2C109%22%20style%3D%22fill%3A%23000000%22%2F%3E%3C/svg%3E");
+	background-repeat: no-repeat, no-repeat;
+	background-position: 100% 100%, center 104px;
+	background-size: 100% 100%, auto;
+}
+
+.slot-actions {
+	position: absolute;
+	top: 154px;
+	left: 0px;
+	display: flex;
+	justify-content: flex-start;
+	gap: 10px; /* 10px spacing between buttons */
+}
+
+.menu button, .save-slot button, .empty-slot button{
+    padding: 5px 10px;
+    font-size: 14px;
+    background-color: #027b76;
+    color: #fff;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+	font-weight: bold;
+	height: 32px;
+}
+
+.dropdown {
+    padding: 5px 10px;
+    font-size: 14px;
+    background-color: #027b76;
+    color: #fff;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+	font-weight: bold;
+	margin-right: 5px;
+	height: 32px;
+}
+
+.save-slot button:hover, .empty-slot button:hover {
+    background-color: #026b66;
+}
+
+.empty-slot .import {
+    position: absolute;
+    top: 139px; /* Position near the bottom */
+    left: -3px;   /* Position near the left */
+}
+
+.save-slot button, .empty-slot button {
+    padding: 5px 10px;
+    font-size: 14px;
+    background-color: #027b76;
+    color: #fff;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+}
+
+.popup-window{
+	display: none;
+	position: fixed;
+	min-width: min(848px, 90vw);
+	max-width: 90vw;
+	top: 50%;
+	left: 50%;
+	transform: translate(-50%, -50%);
+	padding: 20px;
+	background-color: #2A2A2A;
+	border: 1px solid #c0c0c0;
+	box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+	z-index: 9999;
+	border-radius: 15px;
+	max-height: 85vh;
+	overflow-y: auto;
+	overflow-x: hidden;
+}
+
+.cat-window table{
+	width: 100%;
+	border-collapse: collapse;
+}
+
+.version-toggle{
+	border: none;
+	border-radius: 4px;
+	color: #fff;
+	font-size: 10px;
+	font-weight: bold;
+	padding: 2px 8px;
+	cursor: pointer;
+	margin-top: 2px;
+}
+
+.toggle-color-gen{
+	background-color: #1a73e8;
+}
+
+.toggle-color-mhx{
+	background-color: #34a853;
+}
+
+.popup-window-overlay{
+	position: fixed;
+	top: 0;
+	left: 0;
+	width: 100%;
+	height: 100%;
+	background-color: rgba(0, 0, 0, 0.5);
+	z-index: 9998;
+	display: none;
+}
+
+.close-popup-button{
+	position: absolute;
+	top: 0px;
+	right: 10px;
+	cursor: pointer;
+	font-size: 20px;
+	color: #ffffff;
+}
+
+.close-popup-button:hover{
+	color: #c0c0c0;
+}
+
+.cat-window{
+	/* Plain block flow (not SilverJolteon's original flex-wrap layout) - his
+	   flex column defaulted children to their max-content width since
+	   align-items wasn't "stretch", which is exactly what was pushing our
+	   text/table content wider than the popup and forcing it sideways. */
+	display: block;
+	font-size: 12px;
+	color: #ffffff;
+}
+
+.cat-window > * {
+	margin-bottom: 10px;
+}
+
+.cat-window button{
+    padding: 5px 10px;
+    font-size: 12px;
+    background-color: #027b76;
+    color: #fff;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+	font-weight: bold;
+	height: 24px;
+}
+
+.footer{
+	display: flex;
+	align-items: center;
+	justify-content: center;
+    position: fixed;
+    bottom: 0;
+	left: 0;
+	width: 100%;
+	height: 32px;
+	color: #959396;
+	background-color: rgba(32, 32, 32, 0.7);
+	border-top: 1px solid #027b76;
+    font-size: 12px;
+}
+
+.footer a{
+	color: #959396;
+	text-decoration: none;
+}
