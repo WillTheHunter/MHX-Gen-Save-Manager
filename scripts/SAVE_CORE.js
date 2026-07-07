@@ -225,4 +225,35 @@ class MHGenSaveFile
 
         return out;
     }
+
+    // Rebuilds the output using the CURRENTLY LOADED file as the base, instead
+    // of a fresh clean template - preserves the quest-DLC section (and
+    // anything else outside the 3 character slots), which runDLCInject()
+    // patches directly on `this.data`. buildOutput() above always starts from
+    // a brand-new clean template with no DLC installed, so it silently
+    // discarded any injected DLC on every export - this is the fix. Only
+    // valid when NOT converting region: MHGen and MHX aren't byte-compatible
+    // containers, so a real region conversion still has to go through
+    // buildOutput() with the target region's own clean template (and losing
+    // the source region's DLC/quest state in that case is expected, since
+    // GEN and MHX have entirely separate DLC catalogs anyway).
+    buildOutputInPlace()
+    {
+        const out = new Uint8Array(this.data);
+
+        for (let slot = 0; slot < 3; slot++)
+        {
+            out[0x04 + slot] = this.slots[slot];
+
+            if (!this.slots[slot])
+            {
+                continue;
+            }
+
+            out.set(this.save_slots[slot].data, this.slotOffsets[slot]);
+            out.set(this.footers[slot], this.slotOffsets[slot] + MHGEN_SLOT_SIZE);
+        }
+
+        return out;
+    }
 }

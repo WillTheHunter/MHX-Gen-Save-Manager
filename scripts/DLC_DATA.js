@@ -194,3 +194,84 @@ function applyBonusPatches(data, patches)
 
     return applied;
 }
+
+
+// Reads whatever pack name text is actually sitting at a given item-pack
+// slot's address in a CURRENTLY LOADED save, rather than assuming the
+// region's own standard pack occupies it. Needed because item packs can be
+// cross-injected (this tool's own "use other game's pack" version toggle, or
+// applyBonusPatches called directly with the other game's patches) - the
+// slot then holds a different game's name text, and the standard per-region
+// name list would show the wrong label.
+//
+// Each of the 12 slots is really just a null-terminated name string packed
+// back-to-back with an occasional short (2-3 byte) numeric/ID field before
+// it - not a fixed-size record with the name always at a fixed sub-offset,
+// which is why this scans forward and skips anything shorter than 4 decoded
+// characters rather than trusting a fixed layout. When a pack was installed
+// via the RAW cross-region patches (not this tool's own pairPatches, which
+// reuses the same data), the name also isn't always reliably null-terminated
+// - the byte immediately after can be a leftover byte from whatever was
+// there before, since that position didn't need patching to reach the new
+// pack's own clean-vs-installed diff. So this treats invalid UTF-8 sequences
+// and control bytes as segment boundaries too, not just nulls - verified
+// against all 5 samples in "saves with packs claimed/" (perfect 12/12 name
+// match) and a simulated cross-region injection (recovers the installed
+// pack's real name, e.g. "ハチミツハンターパック1", with at most a couple of
+// trailing garbage characters in the worst case - still clearly identifiable,
+// which is all this cosmetic label needs).
+function readRecordName(data, minAddr, maxSearchLen)
+{
+    maxSearchLen = maxSearchLen || 48;
+    let i = minAddr;
+    const end = minAddr + maxSearchLen;
+    let out = '';
+
+    while (i < end)
+    {
+        const b = data[i];
+
+        if (b === 0 || b < 0x20)
+        {
+            if (out.length >= 4) return out;
+            out = ''; i++; continue;
+        }
+
+        if (b < 0x80) { out += String.fromCharCode(b); i++; continue; }
+
+        let len, cp;
+        if ((b & 0xE0) === 0xC0) { len = 2; cp = b & 0x1F; }
+        else if ((b & 0xF0) === 0xE0) { len = 3; cp = b & 0x0F; }
+        else if ((b & 0xF8) === 0xF0) { len = 4; cp = b & 0x07; }
+        else { if (out.length >= 4) return out; out = ''; i++; continue; }
+
+        if (i + len > end) { return out.length >= 4 ? out : null; }
+
+        let ok = true;
+        for (let k = 1; k < len; k++)
+        {
+            const cb = data[i + k];
+            if ((cb & 0xC0) !== 0x80) { ok = false; break; }
+            cp = (cp << 6) | (cb & 0x3F);
+        }
+
+        if (!ok) { if (out.length >= 4) return out; out = ''; i++; continue; }
+
+        out += String.fromCodePoint(cp);
+        i += len;
+    }
+
+    return out.length >= 4 ? out : null;
+}
+
+// Slot addresses are derived from itemPacks' own .patches (the smallest
+// patched address for each pack is exactly where its name text starts) -
+// computed from the currently-selected region's own pack list so it stays
+// correct if that list is ever regenerated/reordered.
+function readInstalledPackNames(itemPacks, data)
+{
+    return itemPacks.map((p) => {
+        const minAddr = Math.min(...p.patches.map((x) => x[0]));
+        return readRecordName(data, minAddr);
+    });
+}

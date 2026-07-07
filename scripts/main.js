@@ -61,7 +61,13 @@ function displayInfo(save){
 			</tr></table>
 			<div class="slot-actions">
 			<button onclick="deleteSlot(${index})">Delete</button>
-			<button onclick="exportSlot(${index})">Export</button>
+			<!-- "Export slot" downloads a .saveslot: just this ONE character's raw
+			data, for backing up/moving a single slot between saves in this tool.
+			It is NOT a complete, game-loadable save file - use the top "Export
+			save" button for that (produces "system"/"system_backup"). Named
+			distinctly on purpose so it can't be mistaken for a real save and
+			dropped into a save folder, which would corrupt it. -->
+			<button onclick="exportSlot(${index})">Export slot</button>
 			<button onclick="importSlot(${index})">Import</button>
 			<!-- Port to XX/GU disabled for now - see comment above port_format_dropdown -->
 			<!-- <button onclick="portSlot(${index})" style="margin-left: 20px;">Port to XX/GU</button> -->
@@ -152,7 +158,12 @@ function importSlot(slot){
 // this only shows up on real hardware) - always write both, identical.
 function exportSave(){
 	var targetGame = parseInt(document.getElementById("dropdown").value);
-	var out = save.buildOutput(cleanTemplateFor(targetGame));
+	// Same region as currently loaded -> reuse the loaded file as the base, so
+	// injected DLC (which patches save.data directly) and anything else outside
+	// the 3 character slots survives. Actual region conversion still has to
+	// start from the target region's own clean template (buildOutput) since
+	// GEN/MHX aren't byte-compatible containers.
+	var out = (targetGame === save.game) ? save.buildOutputInPlace() : save.buildOutput(cleanTemplateFor(targetGame));
 	saveByteArray([out], "system");
 	saveByteArray([out], "system_backup");
 }
@@ -541,8 +552,17 @@ function openReclaimWindow(slot){
 	var itemPacks = itemPacksForGame(game);
 	var mask = coreReadClaimedPackMask(save.save_slots[slot].data);
 
+	// Prefer whatever's actually installed in each slot right now (read live
+	// from save.data) over the region's standard pack list - a slot can hold
+	// the OTHER game's pack if it was cross-injected (this tool's own
+	// GEN/MHX version toggle, or applyBonusPatches called directly), and the
+	// standard name would then be wrong. Falls back to the standard name if
+	// nothing readable is found (e.g. a slot whose pack data was never
+	// populated at all).
+	var installedNames = readInstalledPackNames(itemPacks, save.data);
+
 	var items = itemPacks.map((p, i) => ({
-		key: i, checked: (mask & (1 << i)) !== 0, label: p.displayName
+		key: i, checked: (mask & (1 << i)) !== 0, label: installedNames[i] || p.displayName
 	}));
 
 	var popup = document.getElementById("popup");
