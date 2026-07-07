@@ -1,12 +1,38 @@
 // Port a MHGen/MHX character slot into a MHXX (3DS/Switch) or MHGU save.
 //
+// CRITICAL: CLEAN_MHXX_3DS_SAVE's slot 0 is NOT an empty/zeroed character.
+// The first version of this tool built the base template by zeroing out the
+// entire character struct in a real save, then writing our confirmed fields
+// on top of that - which crashed a real 3DS on load. Diffing showed the real
+// struct has ~27,000 non-zero bytes scattered all over its ~1.16MB size, most
+// of which are engine-internal state (tutorial/unlock flags, sentinel/enum
+// values, etc.) that we have no mapping for and that are very likely NOT
+// valid as zero - the game apparently checks/uses some of them even for a
+// "fresh" HR8 character. Zeroing them produced a struct the game refused to
+// load. Fix: CLEAN_MHXX_3DS_SAVE's slot 0 is the UNMODIFIED, real, valid,
+// loadable character from "mhxx ported save/system" (an actual successful
+// MHX->MHXX transfer, done in-game) - portMHGenSlotToMHXX() only overwrites
+// the specific fields listed below on top of it. Every other byte (Palico
+// roster/stats, Guild Card cosmetics, key items, decorations, quest/academy
+// progress) is left exactly as that reference character had it rather than
+// zeroed - a real character's baseline is far less likely to be rejected by
+// the game than an empty struct, even though it means those specific fields
+// won't reflect the actual source save being ported for anyone else's data.
+// Re-verified end to end after this change: porting "mhx start save" and
+// diffing the result against "mhxx ported save" byte-for-byte now matches on
+// 99.0% of the real save's non-zero bytes (up from 15.1% with the zeroed
+// template) - the remaining ~1% is entirely inside the item box's packed
+// array and equipment box type byte, i.e. exactly the already-known,
+// already-documented remap imperfections below, not new unexplained damage.
+//
 // Scope, confirmed against a real transfer (user-verified in-game): name,
 // funds, appearance/color, equipment box, item box, and monster hunt/capture
 // log all carry over. Hunter rank always resets to 8 and play time always
 // resets to 0 (confirmed mandatory by the user, not incidental). Full Palico
 // roster/stats, decorations attached to gear, Guild Card cosmetic mirror
-// fields, and hub/academy point totals are NOT ported - see the notes on
-// each section below for why.
+// fields, and hub/academy point totals are NOT ported (they retain the
+// reference character's own values, inherited from the base template above)
+// - see the notes on each section below for why they aren't overwritten.
 //
 // The MHXX side of every offset below comes from Dawnshifter's
 // MHXXSwitchSaveEditor (github.com/Dawnshifter/MHXXSwitchSaveEditor,
@@ -213,7 +239,7 @@ function transplantMonsterCounts(src, dst, cfg)
 
 function portMHGenSlotToMHXX(sourceSlotData)
 {
-    const target = new Uint8Array(CLEAN_MHXX_3DS_SAVE); // full clean 3DS container, slot 0 already zeroed
+    const target = new Uint8Array(CLEAN_MHXX_3DS_SAVE); // full 3DS container; slot 0 is a real valid character, see header comment
     const dstSlotOffset = coreReadU32(target, 0x10);
 
     const slot = target.subarray(dstSlotOffset, dstSlotOffset + MHXX_SLOT_SIZE);

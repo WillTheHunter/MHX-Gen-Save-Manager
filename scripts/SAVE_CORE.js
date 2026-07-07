@@ -15,16 +15,60 @@
 // since it differs slightly between MHX and MHGen.
 //
 // Within a slot (offsets confirmed by inspecting real saves):
-//   +0x00  - hunter name, UTF-8, 0x20 bytes, null-padded
-//   +0x20  - play time in seconds, uint32
-//   +0x24  - funds (zenny), uint32
-//   +0x28  - hunter rank, uint16
+//   +0x00    - hunter name, UTF-8, 0x20 bytes, null-padded
+//   +0x20    - play time in seconds, uint32
+//   +0x24    - funds (zenny), uint32
+//   +0x28    - hunter rank, uint16
+//   +0x1CDE  - claimed item-pack bitmask, uint16 LE, bit N (0-indexed) = pack
+//              N+1 claimed - i.e. bit 0 = the 1st pack in DLC_GROUPS.js's
+//              GEN_DLC_ITEM_PACKS/MHX_DLC_ITEM_PACKS list, bit 11 = the 12th.
+//              Confirmed against the 5 real GEN save samples in this project
+//              at "saves with packs claimed/" (all the same character,
+//              "WillyKitty" HR337, snapshotted at different points after
+//              claiming different real packs in-game) - the field decodes
+//              perfectly cleanly with no ambiguity at all:
+//                claimed pack 1        -> 0x0001 (bit 0)
+//                claimed pack 1 and 2   -> 0x0003 (bits 0,1)
+//                claimed pack 12        -> 0x0800 (bit 11)
+//                claimed pack 1 and 12  -> 0x0801 (bits 0,11)
+//                claimed all packs      -> 0x0FFF (all 12 bits - GEN/MHX both
+//                                          have exactly 12 packs, matching)
+//              Same relative offset in both games (the old
+//              MH-Gen-X-Item-packs-reclaim tool hardcoded this as an absolute
+//              file offset per game, but it's actually this same slot-
+//              relative position in both - confirming the "identical slot
+//              format between MHGen/MHX" finding above yet again). This is
+//              what blocks a post-region-transfer character from re-claiming
+//              the new game's own (different) item packs: the flag carries
+//              over unchanged during transfer, since the whole slot is
+//              copied verbatim.
+//              NOTE: diffing those 5 samples against each other turns up
+//              plenty of OTHER differing bytes too (mostly clustered in the
+//              item box, ~slot+0x290 onward, plus a handful of scattered
+//              bytes elsewhere) - that's expected and NOT part of the claim
+//              mechanism: they're the same real character played across
+//              multiple real sessions, so normal gameplay drift (item box
+//              contents, etc.) shows up between snapshots regardless of pack
+//              claims. +0x1CDE is the only field that lines up 1:1, with zero
+//              exceptions, against what was actually claimed in each sample.
 // We intentionally do NOT parse the footer (shout-out) contents - that
 // sub-format hasn't been reverse-engineered for these games, so it's kept as
 // an opaque blob and always carried verbatim.
 
 const MHGEN_SLOT_SIZE = 0xEAD6E;
 const MHGEN_THRESHOLD = 3.6 * 1024 * 1024;
+const ITEM_PACK_CLAIM_OFFSET = 0x1CDE;
+
+function coreReadClaimedPackMask(slotData)
+{
+    return coreReadU16(slotData, ITEM_PACK_CLAIM_OFFSET);
+}
+
+function coreWriteClaimedPackMask(slotData, mask)
+{
+    slotData[ITEM_PACK_CLAIM_OFFSET] = mask & 0xFF;
+    slotData[ITEM_PACK_CLAIM_OFFSET + 1] = (mask >>> 8) & 0xFF;
+}
 
 function coreReadU32(data, offset)
 {

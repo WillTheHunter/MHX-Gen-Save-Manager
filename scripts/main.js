@@ -33,10 +33,15 @@ function displayInfo(save){
 	text += `<option value=1 ${save.game === 1 ? "selected" : ""}>MHX (JPN)</option>`;
 	text += `</select><span class="menu"><button onclick="exportSave()">Export save</button></span>`;
 
-	text += `<span class="menu" style="margin-left: 40px;">`;
-	text += `<select class="dropdown" id="port_format_dropdown">`;
-	for (var fmt in PORT_FORMAT_NAMES) text += `<option value="${fmt}">${PORT_FORMAT_NAMES[fmt]}</option>`;
-	text += `</select></span>`;
+	// Port-to-MHXX/MHGU UI disabled for now - the port can still produce a save
+	// that crashes real hardware in cases we haven't verified, and we don't
+	// want people breaking their saves with it. portSlot()/portMHGenSlotToMHXX()/
+	// repackagePortedSave() are untouched - uncomment this block + the
+	// "Port to XX/GU" button in the slot-actions row below to turn it back on.
+	// text += `<span class="menu" style="margin-left: 40px;">`;
+	// text += `<select class="dropdown" id="port_format_dropdown">`;
+	// for (var fmt in PORT_FORMAT_NAMES) text += `<option value="${fmt}">${PORT_FORMAT_NAMES[fmt]}</option>`;
+	// text += `</select></span>`;
 
 	text += `<span class="menu" style="margin-left: 40px;"><button onclick="openCompatWindow()">Check region-transfer compatibility</button></span>`;
 	DL.innerHTML = text;
@@ -58,7 +63,9 @@ function displayInfo(save){
 			<button onclick="deleteSlot(${index})">Delete</button>
 			<button onclick="exportSlot(${index})">Export</button>
 			<button onclick="importSlot(${index})">Import</button>
-			<button onclick="portSlot(${index})" style="margin-left: 20px;">Port to XX/GU</button>
+			<!-- Port to XX/GU disabled for now - see comment above port_format_dropdown -->
+			<!-- <button onclick="portSlot(${index})" style="margin-left: 20px;">Port to XX/GU</button> -->
+			<button onclick="openReclaimWindow(${index})">Reclaim item packs</button>
 			</div>`;
 		}
 		else{
@@ -140,10 +147,14 @@ function importSlot(slot){
 	input.click();
 }
 
+// A real 3DS keeps "system" and "system_backup" byte-identical and crashes on
+// load if they mismatch (emulators like Citra don't enforce this, which is why
+// this only shows up on real hardware) - always write both, identical.
 function exportSave(){
 	var targetGame = parseInt(document.getElementById("dropdown").value);
 	var out = save.buildOutput(cleanTemplateFor(targetGame));
 	saveByteArray([out], "system");
+	saveByteArray([out], "system_backup");
 }
 
 // Persistent per-game DLC selection state, so switching saves/regions doesn't
@@ -444,6 +455,10 @@ function portSlot(slot){
 	var out = repackagePortedSave(mhxx3ds, targetFormat);
 
 	saveByteArray([out], "system");
+	// MHXX-3DS is real 3DS hardware, which keeps "system"/"system_backup"
+	// byte-identical and crashes on load if they mismatch (see exportSave) -
+	// MHXX-Switch/MHGU don't use this file pairing, so only write it here.
+	if (targetFormat === "mhxx_3ds") saveByteArray([out], "system_backup");
 
 	alert(`Ported "${save.save_slots[slot].name}" to ${PORT_FORMAT_NAMES[targetFormat]}.\n\n` +
 		`Carried over: name, funds, appearance/color, equipment box, palico equipment box, item box, and monster hunt/capture log.\n` +
@@ -510,6 +525,67 @@ var REGION_INCOMPATIBLE_ITEMS = {
 		]
 	}
 };
+
+// Directly reads/writes the real per-slot claimed-item-pack bitmask (see
+// ITEM_PACK_CLAIM_OFFSET in SAVE_CORE.js) - checked = currently claimed.
+// Unlike the old standalone MH-Gen-X-Item-packs-reclaim tool (which zeroed
+// an opaque 2-byte field and tracked "already used" separately via a byte
+// appended past the end of the file), this reads the actual live state
+// straight from the save, so no extra tracking byte is needed at all - the
+// checkbox state IS the current truth, and unchecking + Apply writes exactly
+// that back. Mainly useful after a region transfer (MHGen<->MHX carries this
+// flag over unchanged, blocking the new game's own item packs from being
+// re-claimed) but works on any loaded slot.
+function openReclaimWindow(slot){
+	var game = save.game;
+	var itemPacks = itemPacksForGame(game);
+	var mask = coreReadClaimedPackMask(save.save_slots[slot].data);
+
+	var items = itemPacks.map((p, i) => ({
+		key: i, checked: (mask & (1 << i)) !== 0, label: p.displayName
+	}));
+
+	var popup = document.getElementById("popup");
+	popup.innerHTML = `<div class="cat-window">
+		<b>Reclaim item packs - ${save.save_slots[slot].name}</b></br>
+		<span style="font-size: 11px; color: grey;">
+			Checked = already claimed on this character. Uncheck a pack and hit Apply to
+			mark it unclaimed again, so it can be redeemed in-game. Mainly useful right
+			after a region transfer (MHGen &harr; MHX), since the new game's item packs are
+			a completely different campaign but this flag carries over as-is.
+		</span></br></br>
+		<span style="margin-left: 10px;">
+			<button id="reclaim_none" style="height:22px;">Uncheck All</button>
+			<button id="reclaim_all" style="height:22px;">Check All</button>
+		</span></br>
+		${renderGridTable(items, 2, "reclaim-pack", null, game)}</br>
+		<button id="run_reclaim">Apply</button>
+		<button onclick="closeWindow()">Cancel</button>
+	</div>`;
+
+	document.getElementById("reclaim_none").addEventListener("click", () => {
+		popup.querySelectorAll(".reclaim-pack").forEach(cb => cb.checked = false);
+	});
+	document.getElementById("reclaim_all").addEventListener("click", () => {
+		popup.querySelectorAll(".reclaim-pack").forEach(cb => cb.checked = true);
+	});
+	document.getElementById("run_reclaim").addEventListener("click", () => applyReclaim(slot));
+
+	document.getElementById("popup-window-overlay").style.display = "block";
+	document.getElementById("popup-window").style.display = "block";
+}
+
+function applyReclaim(slot){
+	var popup = document.getElementById("popup");
+	var newMask = 0;
+	popup.querySelectorAll(".reclaim-pack").forEach(cb => {
+		if (cb.checked) newMask |= (1 << parseInt(cb.dataset.key));
+	});
+
+	coreWriteClaimedPackMask(save.save_slots[slot].data, newMask);
+	closeWindow();
+	alert(`Updated claimed item packs for "${save.save_slots[slot].name}". Export the save to keep this change.`);
+}
 
 function openCompatWindow(){
 	var popup = document.getElementById("popup");
