@@ -275,3 +275,173 @@ function readInstalledPackNames(itemPacks, data)
         return readRecordName(data, minAddr);
     });
 }
+
+
+// Clears any quest slot whose CURRENT id is in questIds - the inverse of
+// injectQuests(). Scans all 140 slots (matching injectQuests' own approach)
+// rather than trusting listIndex, since a quest may have landed in a
+// different slot than its own listIndex if that slot was already taken when
+// it was installed. Also clears the matching bit in the installed-quest
+// bitfield so the game's own bookkeeping stays consistent with the save
+// data. Does NOT distinguish 'installed via this tool' from 'already
+// present for some other reason' - it just removes whatever quest currently
+// occupies a slot with a matching id, since the quest table has no other
+// way to record how a quest got there.
+function removeQuests(data, questIds, large)
+{
+    const slotSize = large ? DLC_QUEST_SLOT_SIZE_LARGE : DLC_QUEST_SLOT_SIZE_SMALL;
+
+    const sectionOffset = dlcReadInt32LE(data, 0xC);
+    const installedAddr = sectionOffset + DLC_INSTALLED_OFFSET;
+
+    const bits = [];
+    for (let i = 0; i < 5; i++)
+    {
+        bits.push(dlcReadInt32LE(data, installedAddr + i * 4) >>> 0);
+    }
+
+    const installedIds = dlcExpandInstalledIds(bits);
+    const idsToRemove = new Set(questIds);
+
+    let questOffset = sectionOffset + DLC_QUEST_TABLE_OFFSET;
+    let removed = 0;
+
+    for (let slot = 0; slot < 140; slot++)
+    {
+        const currentId = dlcReadInt32LE(data, questOffset);
+
+        if (currentId !== 0 && idsToRemove.has(currentId))
+        {
+            dlcWriteInt32LE(data, questOffset, 0);
+            dlcWriteInt32LE(data, questOffset + 4, 0);
+            for (let b = 8; b < slotSize; b++)
+            {
+                data[questOffset + b] = 0;
+            }
+
+            for (let j = 0; j < 140; j++)
+            {
+                if (installedIds[j] === currentId)
+                {
+                    installedIds[j] = 0;
+                    break;
+                }
+            }
+
+            removed++;
+        }
+
+        questOffset += slotSize;
+    }
+
+    const newBits = dlcPackInstalledBits(installedIds);
+    for (let i = 0; i < 5; i++)
+    {
+        dlcWriteInt32LE(data, installedAddr + i * 4, newBits[i]);
+    }
+
+    return { removed };
+}
+
+// Encodes `text` as UTF-8 into a fixed-width, null-terminated field starting
+// at `startAddr`. Always reserves the last byte for the null terminator -
+// if `text` is too long to fit, it's truncated rather than overflowing into
+// whatever data follows the field (item packs have no padding between a
+// pack's own name and the next pack's data, so overflowing here would
+// corrupt real data, not just waste space).
+function encodeTextField(startAddr, width, text)
+{
+    const bytes = new TextEncoder().encode(text);
+    const usable = width - 1;
+    const patches = [];
+
+    for (let i = 0; i < usable; i++)
+    {
+        patches.push([startAddr + i, i < bytes.length ? bytes[i] : 0]);
+    }
+
+    patches.push([startAddr + width - 1, 0]);
+    return patches;
+}
+
+// Overlays a pack's own translated name on top of whichever base record
+// (native .patches or cross-region .pairPatches, both already applied) was
+// chosen - touches ONLY that pack's own name bytes, never the "peek" text
+// for the next pack in the list or this pack's own reward-item data that
+// immediately follows. Pack index 0 (in EITHER game's own list) carries a
+// one-time 4-byte global prefix before its own name (a table-wide field,
+// not per-pack) - `isFirstPack` accounts for that.
+function buildPackTranslationOverlay(basePatches, translatedText, fieldWidth, isFirstPack)
+{
+    const minA = Math.min(...basePatches.map((x) => x[0]));
+    const nameStart = isFirstPack ? minA + 4 : minA;
+    return encodeTextField(nameStart, fieldWidth, translatedText);
+}
+
+// Same idea for Palicoes: each record has 3 fixed-width text fields at
+// constant relative offsets (name @0/32 bytes, comment @96/48 bytes,
+// namegiver @156/52 bytes) regardless of which game's record it is -
+// verified against multiple real records of both games, including the
+// larger JP-exclusive collab entries.
+function buildPalicoTranslationOverlay(basePatches, translatedName, translatedComment, translatedNamegiver)
+{
+    const minA = Math.min(...basePatches.map((x) => x[0]));
+
+    return [
+        ...encodeTextField(minA, 32, translatedName),
+        ...encodeTextField(minA + 96, 48, translatedComment),
+        ...encodeTextField(minA + 156, 52, translatedNamegiver)
+    ];
+}
+
+// Resets an entire address range back to the CLEAN TEMPLATE's own bytes
+// (not to a hardcoded 0) before reinstalling the current selection. Used
+// for the item-pack and Palico tables - those records are variable-length
+// (a pack's own name field has no padding before the next pack's data) and
+// different games/versions/lengths can occupy different byte spans for
+// "the same" slot, so patching only the addresses the NEWLY selected
+// version happens to use can leave stale bytes from whatever was there
+// before (wrong item data, corrupted or wrong-pack names). Resetting the
+// whole table first, then writing only the current selection, guarantees
+// no leftovers regardless of what was previously installed.
+//
+// Must copy from the clean template rather than zeroing outright - the
+// Palico table in particular has scattered bytes that are unconditionally
+// 0xFF in EVERY real save (with or without any DLC at all, confirmed
+// against a real character's own before/after-DLC saves) - unrelated
+// structural padding/markers that just happen to sit inside the address
+// range our per-Palico patches span. Zeroing them (an earlier version of
+// this function did) silently corrupted them, which is what caused the
+// in-game "fur color preview" glitch in the Palico shop list - the clean
+// template already has the correct byte at every position in this range,
+// claimed-slot data included, so copying from it is always safe.
+function resetRangeFromTemplate(data, cleanTemplate, lo, hi)
+{
+    for (let a = lo; a < hi; a++)
+    {
+        data[a] = cleanTemplate[a];
+    }
+}
+
+// Returns the set of quest ids currently occupying a slot in the 140-slot
+// quest table, read the same way injectQuests/removeQuests scan it.
+function dlcGetInstalledQuestIds(data, large)
+{
+    const slotSize = large ? DLC_QUEST_SLOT_SIZE_LARGE : DLC_QUEST_SLOT_SIZE_SMALL;
+    const sectionOffset = dlcReadInt32LE(data, 0xC);
+    let questOffset = sectionOffset + DLC_QUEST_TABLE_OFFSET;
+    const ids = new Set();
+
+    for (let slot = 0; slot < 140; slot++)
+    {
+        const id = dlcReadInt32LE(data, questOffset);
+        if (id !== 0)
+        {
+            ids.add(id);
+        }
+
+        questOffset += slotSize;
+    }
+
+    return ids;
+}

@@ -28,7 +28,16 @@ var PORT_FORMAT_NAMES = {mhxx_3ds: "MHXX 3DS (JP)", mhxx_switch: "MHXX Switch (J
 
 function displayInfo(save){
 	var DL = document.getElementById("DL");
-	var text = `<select class="dropdown" id="dropdown">`;
+	// Dedicated, unmissable read-only indicator of what's ACTUALLY loaded
+	// (auto-detected from file size in MHGenSaveFile.init/detectGame) -
+	// separate from the dropdown below, which is a CONVERSION TARGET picker
+	// for Export save, not a "what did I load" indicator. Confusing the two
+	// caused a real bug report (user thought their loaded MHX save was being
+	// treated as GEN because the dropdown's purpose wasn't obvious).
+	var loadedLabel = save.game === 0 ? "MHGen (EUR/USA)" : "MHX (JPN)";
+	var loadedColor = save.game === 0 ? "#2266cc" : "#22aa55";
+	var text = `<span style="font-weight:bold; padding: 4px 10px; border-radius: 4px; background:${loadedColor}; color:white; margin-right: 10px;">Loaded: ${loadedLabel}</span>`;
+	text += `<select class="dropdown" id="dropdown" title="Export save as - only change this to convert region">`;
 	text += `<option value=0 ${save.game === 0 ? "selected" : ""}>MHGen (EUR/USA)</option>`;
 	text += `<option value=1 ${save.game === 1 ? "selected" : ""}>MHX (JPN)</option>`;
 	text += `</select><span class="menu"><button onclick="exportSave()">Export save</button></span>`;
@@ -116,7 +125,14 @@ function readSave(event){
 }
 
 function loadSave(){
-	document.getElementById("loadSave").click();
+	// Reset the input's value first - browsers don't fire "change" again if the
+	// exact same file path is reselected (e.g. re-loading the same "system" file
+	// after editing it elsewhere), which left `save`/the whole UI (including the
+	// Reclaim item packs list) stuck showing the PREVIOUS save's data with no
+	// visible error.
+	var input = document.getElementById("loadSave");
+	input.value = "";
+	input.click();
 }
 
 function deleteSlot(slot){
@@ -197,8 +213,10 @@ function getDLCSelection(game){
 			questVersion: new Set(), // ids using the OTHER game's version
 			itemPacks: new Set(itemPacksForGame(game).map((p, i) => i)),
 			itemPackVersion: new Set(), // indices using the OTHER game's pack in this slot
+			itemPackTranslated: new Set(), // indices writing translated (EN) text instead of original
 			palicoes: new Set(palicoesForGame(game).map((p, i) => i)),
-			palicoVersion: new Set() // indices using the OTHER game's version
+			palicoVersion: new Set(), // indices using the OTHER game's version
+			palicoTranslated: new Set() // indices writing translated (EN) text instead of original
 		};
 	}
 	return dlcSelection[game];
@@ -217,7 +235,7 @@ function escapeHtml(s){
 	return div.innerHTML;
 }
 
-function renderGridTable(items, cols, checkboxClass, versionClass, game){
+function renderGridTable(items, cols, checkboxClass, versionClass, game, translationClass){
 	var rows = Math.ceil(items.length / cols);
 	var html = "<table>";
 	for (var r = 0; r < rows; r++){
@@ -232,6 +250,9 @@ function renderGridTable(items, cols, checkboxClass, versionClass, game){
 				if (item.pairLabel){
 					html += `</br>` + versionToggleHtml(versionClass, item.key, game, item.useOther, item.label, item.pairLabel);
 				}
+				if (translationClass && item.hasTranslation){
+					html += ` ` + translationToggleHtml(translationClass, item.key, item.useTranslated, item.translationVisible);
+				}
 			}
 			html += `</td>`;
 		}
@@ -239,6 +260,25 @@ function renderGridTable(items, cols, checkboxClass, versionClass, game){
 	}
 	html += "</table>";
 	return html;
+}
+
+// Independent of the GEN/MHX version toggle above - controls whether the
+// NAME (and, for Palicoes, comment/namegiver) text written into the save is
+// the record's own original-language text or a translated-to-English
+// overlay, regardless of which region's underlying record was chosen. Only
+// meaningful (and only visible) when the CURRENTLY selected version for this
+// entry is MHX-native (Japanese) - GEN's own text is already English, so
+// translating it is a no-op. Always rendered in the DOM (rather than
+// added/removed) so flipVersionButton can just toggle its visibility.
+function translationToggleHtml(translationClass, key, useTranslated, visible){
+	return `<button class="${translationClass} translation-toggle" data-key="${key}" data-state="${useTranslated ? 1 : 0}"
+		style="font-size: 10px; padding: 1px 4px; ${visible ? "" : "display:none;"}">${useTranslated ? "Translated" : "Original"}</button>`;
+}
+
+function flipTranslationButton(btn){
+	var useTranslated = btn.dataset.state === "1" ? false : true;
+	btn.dataset.state = useTranslated ? "1" : "0";
+	btn.textContent = useTranslated ? "Translated" : "Original";
 }
 
 function versionToggleHtml(versionClass, key, game, useOther, nativeLabel, otherLabel){
@@ -265,11 +305,28 @@ function flipVersionButton(btn, game){
 	if (nameLabel){
 		nameLabel.textContent = useOther ? btn.dataset.otherLabel : btn.dataset.nativeLabel;
 	}
+
+	// Original/Translated only makes sense while MHX (Japanese) content is
+	// the one selected - show/hide it live as the version flips, and reset
+	// it back to "Original" when hiding so a stale "Translated" state can't
+	// silently carry over to GEN-native content next time it's shown.
+	var translationBtn = btn.closest("td").querySelector(".translation-toggle");
+	if (translationBtn){
+		if (shownGame === 1){
+			translationBtn.style.display = "";
+		} else {
+			translationBtn.style.display = "none";
+			translationBtn.dataset.state = "0";
+			translationBtn.textContent = "Original";
+		}
+	}
 }
 
-function sectionControlsHtml(prefix){
+function sectionControlsHtml(prefix, hasTranslation){
 	return `<span style="margin-left: 10px;">
 		<button id="${prefix}_toggle" style="height:22px;">Toggle GEN/X</button>
+		${hasTranslation ? `<button id="${prefix}_toggle_translation" style="height:22px;">Toggle Original/Translated</button>` : ``}
+		<button id="${prefix}_all" style="height:22px;">Check All</button>
 		<button id="${prefix}_none" style="height:22px;">Uncheck All</button>
 		<button id="${prefix}_default" style="height:22px;">Set to Default</button>
 	</span>`;
@@ -277,20 +334,55 @@ function sectionControlsHtml(prefix){
 
 // Wires the 3 standard per-section buttons: bulk-flip every version toggle in
 // the section, uncheck every "install" checkbox, or reset both back to
-// defaults (everything installed, native version).
-function wireSectionControls(popup, prefix, checkboxClass, versionClass, game, defaultKeys){
+// defaults (everything installed, native version). excludeFromDefaultKeys
+// (a Set of checkbox keys) is skipped by "Set to Default" - used for entries
+// appended to a list that aren't actually native/default for this game (e.g.
+// the 4 MHX-exclusive quests shown in GEN's own Event Quests grid), so
+// clicking "Set to Default" doesn't silently opt them back in.
+function wireSectionControls(popup, prefix, checkboxClass, versionClass, game, excludeFromDefaultKeys, translationClass){
+	var excludeSet = excludeFromDefaultKeys || new Set();
 	document.getElementById(`${prefix}_toggle`).addEventListener("click", () => {
 		popup.querySelectorAll(`.${versionClass}`).forEach(btn => flipVersionButton(btn, game));
+	});
+	document.getElementById(`${prefix}_all`).addEventListener("click", () => {
+		popup.querySelectorAll(`.${checkboxClass}`).forEach(cb => cb.checked = true);
 	});
 	document.getElementById(`${prefix}_none`).addEventListener("click", () => {
 		popup.querySelectorAll(`.${checkboxClass}`).forEach(cb => cb.checked = false);
 	});
 	document.getElementById(`${prefix}_default`).addEventListener("click", () => {
-		popup.querySelectorAll(`.${checkboxClass}`).forEach(cb => cb.checked = true);
+		popup.querySelectorAll(`.${checkboxClass}`).forEach(cb => {
+			if (!excludeSet.has(parseInt(cb.dataset.key))) cb.checked = true;
+		});
 		popup.querySelectorAll(`.${versionClass}`).forEach(btn => {
 			if (btn.dataset.state !== "0") flipVersionButton(btn, game);
 		});
+		if (translationClass){
+			popup.querySelectorAll(`.${translationClass}`).forEach(btn => {
+				if (btn.dataset.state !== "0") flipTranslationButton(btn);
+			});
+		}
 	});
+	if (translationClass){
+		var toggleTranslationBtn = document.getElementById(`${prefix}_toggle_translation`);
+		if (toggleTranslationBtn){
+			toggleTranslationBtn.addEventListener("click", () => {
+				popup.querySelectorAll(`.${translationClass}`).forEach(btn => flipTranslationButton(btn));
+			});
+		}
+	}
+}
+
+// The 4 MHX-exclusive event quests (Sanrio/Capcom/Macross Delta collabs) have
+// no GEN release, so they aren't part of GEN_DLC_QUESTS' own 99-quest list -
+// but quest IDs are a shared numbering scheme (verified safe to inject
+// either game's quest bytes for a shared ID, no address remapping needed),
+// so they CAN be offered for a GEN save too. Appended for UI/injection
+// purposes only here rather than baked into GEN_DLC_QUESTS itself, so
+// anything that assumes GEN has exactly 99 quests elsewhere isn't affected.
+function mhxExclusiveQuestsForGen(){
+	var genIds = new Set(GEN_DLC_QUESTS.map(q => q.id));
+	return MHX_DLC_QUESTS.filter(q => !genIds.has(q.id));
 }
 
 function openDLCWindow(){
@@ -305,19 +397,47 @@ function openDLCWindow(){
 	var palicoes = palicoesForGame(game);
 	var itemPacks = itemPacksForGame(game);
 	var other = otherGameLabel(game);
+	var extraQuests = (game === 0) ? mhxExclusiveQuestsForGen() : [];
 
 	var challengeQuests = quests.filter(q => q.listIndex < 20);
-	var eventQuests = quests.filter(q => q.listIndex >= 20);
+	var eventQuests = quests.filter(q => q.listIndex >= 20).concat(extraQuests);
 
-	var itemPackItems = itemPacks.map((p, i) => ({
-		key: i, checked: sel.itemPacks.has(i), label: p.displayName,
-		pairLabel: p.pairDisplayName, useOther: sel.itemPackVersion.has(i)
-	}));
+	// The Original/Translated toggle is only meaningful (and only shown) when
+	// the content CURRENTLY selected for that slot is MHX-native (Japanese) -
+	// GEN's own text is already English, so translating it is a no-op.
+	// "Currently selected" accounts for the GEN/MHX version toggle: flipping
+	// a GEN entry to its MHX version makes translation meaningful for that
+	// entry until flipped back (handled live in flipVersionButton below).
+	// Entries with NO pairing at all (the JP-exclusive Palicoes appended to
+	// GEN's list, and their native counterparts on MHX's own list) are
+	// always MHX-origin regardless of which list displays them - there's no
+	// version toggle to flip, but the translation toggle still matters
+	// (lets someone keep the true original Japanese text instead of the
+	// pre-translated English, useful e.g. before a region transfer).
+	function effectiveGame(useOther, hasPairing){
+		if (!hasPairing) return 1;
+		return useOther ? (game === 0 ? 1 : 0) : game;
+	}
 
-	var palicoItems = palicoes.map((p, i) => ({
-		key: i, checked: sel.palicoes.has(i), label: p.displayName,
-		pairLabel: p.pairDisplayName, useOther: sel.palicoVersion.has(i)
-	}));
+	var itemPackItems = itemPacks.map((p, i) => {
+		var useOther = sel.itemPackVersion.has(i);
+		return {
+			key: i, checked: sel.itemPacks.has(i), label: p.displayName,
+			pairLabel: p.pairDisplayName, useOther: useOther,
+			hasTranslation: !!p.translatedName, translationVisible: effectiveGame(useOther, !!p.pairPatches) === 1,
+			useTranslated: sel.itemPackTranslated.has(i)
+		};
+	});
+
+	var palicoItems = palicoes.map((p, i) => {
+		var useOther = sel.palicoVersion.has(i);
+		return {
+			key: i, checked: sel.palicoes.has(i), label: p.displayName,
+			pairLabel: p.pairDisplayName, useOther: useOther,
+			hasTranslation: !!p.translatedName, translationVisible: effectiveGame(useOther, !!p.pairPatches) === 1,
+			useTranslated: sel.palicoTranslated.has(i)
+		};
+	});
 
 	function questItem(q){
 		return {
@@ -328,20 +448,20 @@ function openDLCWindow(){
 
 	var popup = document.getElementById("popup");
 	popup.innerHTML = `<div class="cat-window">
-		<b>Inject DLC</b></br>
+		<b>Inject DLC - ${game === 0 ? "MHGen (EUR/USA)" : "MHX (JPN)"}</b></br>
 		<span style="font-size: 11px; color: grey;">Tick the box above each entry to install it; anything already installed is left alone either way. Where a colored GEN/MHX button is shown, it's a confirmed match (same quest ID, or same collab Palico by brand, or the pack in the same slot) - click it to switch which game's bytes get written; blue = GEN, green = MHX.</span></br></br>
 
 		<b>Item Packs (${itemPacks.length})</b>
-		${sectionControlsHtml("pack")}</br>
+		${sectionControlsHtml("pack", true)}</br>
 		<span style="font-size: 11px; color: grey;">
-			GEN and MHX have entirely separate item pack campaigns (different real-world promotions) - the version toggle here just swaps in whichever pack sits in this same slot in the other game, not the "same" pack.
+			GEN and MHX have entirely separate item pack campaigns (different real-world promotions) - the version toggle here just swaps in whichever pack sits in this same slot in the other game, not the "same" pack. The Original/Translated toggle only changes the pack's NAME text, independent of which version's bytes get written - "Translated" always writes the English name, "Original" writes whatever language the chosen version naturally has.
 		</span></br>
-		${renderGridTable(itemPackItems, 2, "dlc-pack", "dlc-pack-ver", game)}</br>
+		${renderGridTable(itemPackItems, 2, "dlc-pack", "dlc-pack-ver", game, "dlc-pack-tr")}</br>
 
 		<b>Palicoes (${palicoes.length})</b>
-		${sectionControlsHtml("palico")}</br>
-		<span style="font-size: 11px; color: grey;">Palicoes with no GEN release at all (Sanrio, Macross Delta, and other JP-only collabs) are included at the end of the list, injectable into a GEN save too - they'll only ever be in Japanese, since no English text for them exists.</span></br>
-		${renderGridTable(palicoItems, 4, "dlc-palico", "dlc-palico-ver", game)}</br>
+		${sectionControlsHtml("palico", true)}</br>
+		<span style="font-size: 11px; color: grey;">Palicoes with no GEN release at all (Sanrio, Macross Delta, and other JP-only collabs) are included at the end of the list, injectable into a GEN save too. The Original/Translated toggle affects name, comment, and namegiver text together - "Translated" always writes English (community-translated for the JP-only ones), independent of which version's bytes get written.</span></br>
+		${renderGridTable(palicoItems, 4, "dlc-palico", "dlc-palico-ver", game, "dlc-palico-tr")}</br>
 
 		<b>Challenge/Arena Quests (${challengeQuests.length})</b>
 		${sectionControlsHtml("cquest")}</br>
@@ -349,9 +469,14 @@ function openDLCWindow(){
 
 		<b>Event Quests (${eventQuests.length})</b>
 		${sectionControlsHtml("equest")}</br>
+		${game === 0 ? `<span style="font-size: 11px; color: grey;">The last ${extraQuests.length} have no GEN release at all (Sanrio/Capcom/Macross Delta collabs) - included here since quest IDs are shared safely between games, unchecked by default since GEN wouldn't normally offer them.</span></br>` : ``}
 		${renderGridTable(eventQuests.map(questItem), 3, "dlc-equest", "dlc-equest-ver", game)}</br>
 
 		<button id="run_dlc">Inject Selected</button>
+		<span style="margin-left: 20px;">
+			<button id="add_all_dlc">Add all DLC</button>
+			<button id="remove_all_dlc">Remove all DLC</button>
+		</span>
 	</div>`;
 
 	// Assignment (not addEventListener) - #popup persists across re-renders of
@@ -361,32 +486,55 @@ function openDLCWindow(){
 	// visible change). Assigning onclick always replaces the previous one.
 	popup.onclick = (e) => {
 		if (e.target.classList.contains("version-toggle")) flipVersionButton(e.target, game);
+		if (e.target.classList.contains("translation-toggle")) flipTranslationButton(e.target);
 	};
 
-	wireSectionControls(popup, "pack", "dlc-pack", "dlc-pack-ver", game);
-	wireSectionControls(popup, "palico", "dlc-palico", "dlc-palico-ver", game);
+	wireSectionControls(popup, "pack", "dlc-pack", "dlc-pack-ver", game, null, "dlc-pack-tr");
+	wireSectionControls(popup, "palico", "dlc-palico", "dlc-palico-ver", game, null, "dlc-palico-tr");
 	wireSectionControls(popup, "cquest", "dlc-cquest", "dlc-cquest-ver", game);
-	wireSectionControls(popup, "equest", "dlc-equest", "dlc-equest-ver", game);
+	wireSectionControls(popup, "equest", "dlc-equest", "dlc-equest-ver", game, new Set(extraQuests.map(q => q.id)));
 
 	document.getElementById("run_dlc").addEventListener("click", runDLCInject);
+
+	// One-click shortcuts that set every checkbox in the whole popup (not
+	// just one section) and immediately apply the result - "Add all DLC"
+	// still respects the MHX-exclusive-quests-not-checked-by-default rule
+	// (same exclusion "Set to Default" uses); "Remove all DLC" clears
+	// everything, extras included, since removing is always safe to be
+	// thorough about.
+	var extraQuestIds = new Set(extraQuests.map(q => q.id));
+	document.getElementById("add_all_dlc").addEventListener("click", () => {
+		popup.querySelectorAll(".dlc-pack, .dlc-palico, .dlc-cquest").forEach(cb => cb.checked = true);
+		popup.querySelectorAll(".dlc-equest").forEach(cb => { if (!extraQuestIds.has(parseInt(cb.dataset.key))) cb.checked = true; });
+		runDLCInject();
+	});
+	document.getElementById("remove_all_dlc").addEventListener("click", () => {
+		popup.querySelectorAll(".dlc-pack, .dlc-palico, .dlc-cquest, .dlc-equest").forEach(cb => cb.checked = false);
+		runDLCInject();
+	});
 
 	document.getElementById("popup-window-overlay").style.display = "block";
 	document.getElementById("popup-window").style.display = "block";
 }
 
-function runDLCInject(){
+// Reads whatever is CURRENTLY ticked/toggled in the Inject DLC popup back
+// into the persistent per-game `sel` object - called both right before
+// actually injecting AND whenever the popup closes (see closeWindow()), so
+// closing the popup without clicking "Inject Selected" still remembers the
+// in-progress selection next time it's opened, instead of silently
+// reverting to whatever was last actually injected. A no-op if the DLC
+// popup isn't the one currently open (checked via the Inject Selected
+// button's presence, since Reclaim/Compat popups reuse the same #popup).
+function syncDLCSelectionFromPopup(){
+	if (!document.getElementById("run_dlc")) return;
+
 	var game = save.game;
 	var sel = getDLCSelection(game);
 	var popup = document.getElementById("popup");
 
-	var quests = questsForGame(game);
-	var otherQuests = questsForGame(game === 0 ? 1 : 0);
-	var palicoes = palicoesForGame(game);
-	var itemPacks = itemPacksForGame(game);
-
 	function checkedKeys(selector){
 		var set = new Set();
-		popup.querySelectorAll(selector).forEach(cb => set.add(parseInt(cb.dataset.key)));
+		popup.querySelectorAll(selector).forEach(cb => { if (cb.checked) set.add(parseInt(cb.dataset.key)); });
 		return set;
 	}
 	function versionKeys(selector){
@@ -397,17 +545,65 @@ function runDLCInject(){
 
 	sel.itemPacks = checkedKeys(".dlc-pack");
 	sel.itemPackVersion = versionKeys(".dlc-pack-ver");
+	sel.itemPackTranslated = versionKeys(".dlc-pack-tr");
 
 	sel.palicoes = checkedKeys(".dlc-palico");
 	sel.palicoVersion = versionKeys(".dlc-palico-ver");
+	sel.palicoTranslated = versionKeys(".dlc-palico-tr");
 
 	sel.quests = new Set([...checkedKeys(".dlc-cquest"), ...checkedKeys(".dlc-equest")]);
 	sel.questVersion = new Set([...versionKeys(".dlc-cquest-ver"), ...versionKeys(".dlc-equest-ver")]);
+}
+
+function runDLCInject(){
+	syncDLCSelectionFromPopup();
+
+	var game = save.game;
+	var sel = getDLCSelection(game);
+
+	var quests = questsForGame(game);
+	var otherQuests = questsForGame(game === 0 ? 1 : 0);
+	var palicoes = palicoesForGame(game);
+	var otherPalicoes = palicoesForGame(game === 0 ? 1 : 0);
+	var itemPacks = itemPacksForGame(game);
+	var otherItemPacks = itemPacksForGame(game === 0 ? 1 : 0);
+	var extraQuests = (game === 0) ? mhxExclusiveQuestsForGen() : [];
 
 	var large = game === 0;
 
+	// Quest table, item-pack table, and Palico table are all wiped COMPLETELY
+	// before reinstalling the current selection, rather than only patching
+	// addresses the currently-selected version happens to use. Packs/Palicoes
+	// store variable-length text with no padding before the next entry's
+	// data, so switching a slot from one version/length to another (or from
+	// checked to unchecked) could leave stale bytes behind that the new,
+	// narrower selection of addresses never touches - wrong item data, or a
+	// name showing corrupted/leftover text from whatever was there before.
+	// Quests have a parallel issue: injectQuests only writes into EMPTY
+	// slots, so toggling a quest's GEN/MHX version after it's already
+	// installed silently did nothing. Wiping first and then writing only
+	// what's currently checked makes every run deterministic regardless of
+	// what was there before.
+	var beforeQuestIds = dlcGetInstalledQuestIds(save.data, large);
+	removeQuests(save.data, [...beforeQuestIds], large);
+
+	function tableRange(list){
+		var lo = Infinity, hi = -Infinity;
+		list.forEach(p => {
+			p.patches.forEach(([a]) => { if (a < lo) lo = a; if (a > hi) hi = a; });
+			if (p.pairPatches) p.pairPatches.forEach(([a]) => { if (a < lo) lo = a; if (a > hi) hi = a; });
+		});
+		return [lo, hi + 1];
+	}
+	var cleanTemplate = cleanTemplateFor(game);
+	var packRange = tableRange(itemPacks);
+	resetRangeFromTemplate(save.data, cleanTemplate, packRange[0], packRange[1]);
+	var palicoRange = tableRange(palicoes);
+	resetRangeFromTemplate(save.data, cleanTemplate, palicoRange[0], palicoRange[1]);
+
+	var allQuestsList = quests.concat(extraQuests);
 	var otherQuestById = new Map(otherQuests.map(q => [q.id, q]));
-	var questsToInject = quests
+	var questsToInject = allQuestsList
 		.filter(q => sel.quests.has(q.id))
 		.map(q => {
 			if (sel.questVersion.has(q.id) && otherQuestById.has(q.id)){
@@ -416,32 +612,78 @@ function runDLCInject(){
 			}
 			return [q.listIndex, q.id, q.size, q.data];
 		});
+
 	var questResult = injectQuests(save.data, questsToInject, large);
+	var afterQuestIds = new Set(questsToInject.map(q => q[1]));
+	var questsRemovedCount = 0;
+	beforeQuestIds.forEach(id => { if (!afterQuestIds.has(id)) questsRemovedCount++; });
 
 	var secondaryLog = game === 0 ? GEN_DLC_SECONDARY_LOG : MHX_DLC_SECONDARY_LOG;
 	var flag = game === 0 ? GEN_DLC_FLAG : MHX_DLC_FLAG;
+	var bonusFlags = game === 0 ? GEN_DLC_BONUS_FLAGS : MHX_DLC_BONUS_FLAGS;
+
+	function zeroed(patches){
+		return patches.map(([addr]) => [addr, 0]);
+	}
 
 	var bonusPatches = [];
+	var removalPatches = [];
 	var anyPalico = false;
 	palicoes.forEach((p, i) => {
 		if (sel.palicoes.has(i)){
-			var patches = (sel.palicoVersion.has(i) && p.pairPatches) ? p.pairPatches : p.patches;
+			var useOther = sel.palicoVersion.has(i) && p.pairPatches;
+			var patches = useOther ? p.pairPatches : p.patches;
 			bonusPatches.push(...patches);
+			// Translated text must come from whichever list's OWN entry the
+			// patches actually belong to (own vs pair) - GEN pack/Palico i and
+			// MHX pack/Palico i are different real-world items sharing the same
+			// slot, not the "same" one, so p.translatedName is only correct
+			// when writing p's OWN patches.
+			if (sel.palicoTranslated.has(i)){
+				var textSource = useOther ? otherPalicoes[i] : p;
+				if (textSource.translatedName){
+					bonusPatches.push(...buildPalicoTranslationOverlay(patches, textSource.translatedName, textSource.translatedComment, textSource.translatedNamegiver));
+				}
+			}
 			anyPalico = true;
 		}
 	});
 	if (anyPalico) bonusPatches.push(...secondaryLog);
+	else removalPatches.push(...zeroed(secondaryLog));
 
 	var anyPack = false;
 	itemPacks.forEach((p, i) => {
 		if (sel.itemPacks.has(i)){
-			var patches = (sel.itemPackVersion.has(i) && p.pairPatches) ? p.pairPatches : p.patches;
+			var useOther = sel.itemPackVersion.has(i) && p.pairPatches;
+			var patches = useOther ? p.pairPatches : p.patches;
 			bonusPatches.push(...patches);
+			if (sel.itemPackTranslated.has(i)){
+				var textSource = useOther ? otherItemPacks[i] : p;
+				if (textSource.translatedName){
+					var width = useOther ? p.pairNameFieldWidth : p.nameFieldWidth;
+					bonusPatches.push(...buildPackTranslationOverlay(patches, textSource.translatedName, width, i === 0));
+				}
+			}
 			anyPack = true;
 		}
 	});
-	if (anyPack) bonusPatches.push(flag);
+	// GEN_DLC_BONUS_FLAGS/MHX_DLC_BONUS_FLAGS: a "bonus content available" flag
+	// region sitting in the DLC section header, just before the item-pack
+	// table - found by diffing the original MH-Gen-X-DLC-Save-Injector's
+	// monolithic "install everything" blob against this tool's per-pack split,
+	// which never included it. Missing this is why packs could be written
+	// correctly (byte-identical to a real save) yet not show up as available
+	// at all in-game - the game apparently checks this region, not just the
+	// pack records themselves, to know packs exist. Confirmed by diffing
+	// against a second real reference save; applying just item packs + this
+	// region reproduces the original tool's blob with zero remaining
+	// differences in that whole area. This region sits outside the
+	// pack-table range wiped above, so it still needs its own explicit
+	// zero-when-empty handling.
+	if (anyPack) { bonusPatches.push(flag); bonusPatches.push(...bonusFlags); }
+	else { removalPatches.push([flag[0], 0]); removalPatches.push(...zeroed(bonusFlags)); }
 
+	applyBonusPatches(save.data, removalPatches);
 	var bonusApplied = applyBonusPatches(save.data, bonusPatches);
 
 	save.init();
@@ -449,7 +691,7 @@ function runDLCInject(){
 	displayInfo(save);
 	closeWindow();
 
-	alert(`DLC injected.\n\nQuests installed: ${questResult.installed}\nQuests already owned: ${questResult.alreadyOwned}\nBonus content bytes applied: ${bonusApplied}`);
+	alert(`DLC updated.\n\nQuests installed: ${questResult.installed}\nQuests removed: ${questsRemovedCount}\nBonus content bytes applied: ${bonusApplied}`);
 }
 
 // Carries over: name, funds, appearance/color, equipment box, palico
@@ -638,6 +880,7 @@ function openCompatWindow(){
 }
 
 function closeWindow(){
+	syncDLCSelectionFromPopup();
 	document.getElementById("popup-window-overlay").style.display = "none";
 	document.getElementById("popup-window").style.display = "none";
 }
