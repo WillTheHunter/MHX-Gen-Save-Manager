@@ -245,8 +245,12 @@ function renderGridTable(items, cols, checkboxClass, versionClass, game, transla
 			html += `<td style="border: 1px solid grey; text-align: left; padding: 3px 6px;">`;
 			if (idx < items.length){
 				var item = items[idx];
+				var shownLabel = (item.useOther && item.pairLabel) ? item.pairLabel : item.label;
 				html += `<input type="checkbox" class="${checkboxClass}" data-key="${item.key}" ${item.checked ? "checked" : ""}>
-					<label><span class="item-name-label">${escapeHtml(item.label)}</span></label>`;
+					<label><span class="item-name-label">${escapeHtml(shownLabel)}</span></label>`;
+				if (item.skill){
+					html += `</br><span style="font-size: 10px; color: #7fd0a0;">${escapeHtml(item.skill)}</span>`;
+				}
 				if (item.pairLabel){
 					html += `</br>` + versionToggleHtml(versionClass, item.key, game, item.useOther, item.label, item.pairLabel);
 				}
@@ -373,18 +377,6 @@ function wireSectionControls(popup, prefix, checkboxClass, versionClass, game, e
 	}
 }
 
-// The 4 MHX-exclusive event quests (Sanrio/Capcom/Macross Delta collabs) have
-// no GEN release, so they aren't part of GEN_DLC_QUESTS' own 99-quest list -
-// but quest IDs are a shared numbering scheme (verified safe to inject
-// either game's quest bytes for a shared ID, no address remapping needed),
-// so they CAN be offered for a GEN save too. Appended for UI/injection
-// purposes only here rather than baked into GEN_DLC_QUESTS itself, so
-// anything that assumes GEN has exactly 99 quests elsewhere isn't affected.
-function mhxExclusiveQuestsForGen(){
-	var genIds = new Set(GEN_DLC_QUESTS.map(q => q.id));
-	return MHX_DLC_QUESTS.filter(q => !genIds.has(q.id));
-}
-
 function openDLCWindow(){
 	if (!save){
 		alert("Load or create a save first.");
@@ -397,25 +389,29 @@ function openDLCWindow(){
 	var palicoes = palicoesForGame(game);
 	var itemPacks = itemPacksForGame(game);
 	var other = otherGameLabel(game);
-	var extraQuests = (game === 0) ? mhxExclusiveQuestsForGen() : [];
 
 	var challengeQuests = quests.filter(q => q.listIndex < 20);
-	var eventQuests = quests.filter(q => q.listIndex >= 20).concat(extraQuests);
+	var eventQuests = quests.filter(q => q.listIndex >= 20);
 
 	// The Original/Translated toggle is only meaningful (and only shown) when
-	// the content CURRENTLY selected for that slot is MHX-native (Japanese) -
-	// GEN's own text is already English, so translating it is a no-op.
-	// "Currently selected" accounts for the GEN/MHX version toggle: flipping
-	// a GEN entry to its MHX version makes translation meaningful for that
-	// entry until flipped back (handled live in flipVersionButton below).
-	// Entries with NO pairing at all (the JP-exclusive Palicoes appended to
-	// GEN's list, and their native counterparts on MHX's own list) are
-	// always MHX-origin regardless of which list displays them - there's no
-	// version toggle to flip, but the translation toggle still matters
-	// (lets someone keep the true original Japanese text instead of the
-	// pre-translated English, useful e.g. before a region transfer).
-	function effectiveGame(useOther, hasPairing){
-		if (!hasPairing) return 1;
+	// the content CURRENTLY selected for that slot is actually non-English -
+	// translating already-English text is a no-op. For paired entries (a real
+	// GEN/MHX version toggle exists) this depends on which version is
+	// currently selected: flipping to the MHX version makes translation
+	// meaningful until flipped back (handled live in flipVersionButton
+	// below). For entries with NO pairing at all (appended Palicoes with no
+	// real counterpart in the other game's own list), there's no toggle to
+	// check, so we fall back to comparing the entry's own native text
+	// against its translated text directly - most appended orphans are
+	// JP-exclusive content (translatedName differs from name, so the toggle
+	// is meaningful), but a GEN-exclusive Palico appended to MHX's list
+	// (e.g. Ranger, a cosmetic recolor of MHX's own Mojavu with no real MHX
+	// release of its own) is already English natively, so translating it
+	// would be a no-op just like a native GEN entry - comparing name vs
+	// translatedName handles both cases correctly without needing to know
+	// which list the entry originated from.
+	function effectiveGame(useOther, hasPairing, p){
+		if (!hasPairing) return (p.translatedName && p.translatedName !== p.name) ? 1 : 0;
 		return useOther ? (game === 0 ? 1 : 0) : game;
 	}
 
@@ -424,7 +420,7 @@ function openDLCWindow(){
 		return {
 			key: i, checked: sel.itemPacks.has(i), label: p.displayName,
 			pairLabel: p.pairDisplayName, useOther: useOther,
-			hasTranslation: !!p.translatedName, translationVisible: effectiveGame(useOther, !!p.pairPatches) === 1,
+			hasTranslation: !!p.translatedName, translationVisible: effectiveGame(useOther, !!p.pairPatches, p) === 1,
 			useTranslated: sel.itemPackTranslated.has(i)
 		};
 	});
@@ -434,8 +430,8 @@ function openDLCWindow(){
 		return {
 			key: i, checked: sel.palicoes.has(i), label: p.displayName,
 			pairLabel: p.pairDisplayName, useOther: useOther,
-			hasTranslation: !!p.translatedName, translationVisible: effectiveGame(useOther, !!p.pairPatches) === 1,
-			useTranslated: sel.palicoTranslated.has(i)
+			hasTranslation: !!p.translatedName, translationVisible: effectiveGame(useOther, !!p.pairPatches, p) === 1,
+			useTranslated: sel.palicoTranslated.has(i), skill: p.skill
 		};
 	});
 
@@ -451,26 +447,33 @@ function openDLCWindow(){
 		<b>Inject DLC - ${game === 0 ? "MHGen (EUR/USA)" : "MHX (JPN)"}</b></br>
 		<span style="font-size: 11px; color: grey;">Tick the box above each entry to install it; anything already installed is left alone either way. Where a colored GEN/MHX button is shown, it's a confirmed match (same quest ID, or same collab Palico by brand, or the pack in the same slot) - click it to switch which game's bytes get written; blue = GEN, green = MHX.</span></br></br>
 
-		<b>Item Packs (${itemPacks.length})</b>
-		${sectionControlsHtml("pack", true)}</br>
-		<span style="font-size: 11px; color: grey;">
-			GEN and MHX have entirely separate item pack campaigns (different real-world promotions) - the version toggle here just swaps in whichever pack sits in this same slot in the other game, not the "same" pack. The Original/Translated toggle only changes the pack's NAME text, independent of which version's bytes get written - "Translated" always writes the English name, "Original" writes whatever language the chosen version naturally has.
-		</span></br>
-		${renderGridTable(itemPackItems, 2, "dlc-pack", "dlc-pack-ver", game, "dlc-pack-tr")}</br>
+		<details open>
+			<summary><b>Item Packs (${itemPacks.length})</b></summary>
+			${sectionControlsHtml("pack", true)}</br>
+			<span style="font-size: 11px; color: grey;">
+				GEN and MHX have entirely separate item pack campaigns (different real-world promotions) - the version toggle here just swaps in whichever pack sits in this same slot in the other game, not the "same" pack. The Original/Translated toggle only changes the pack's NAME text, independent of which version's bytes get written - "Translated" always writes the English name, "Original" writes whatever language the chosen version naturally has.
+			</span></br>
+			${renderGridTable(itemPackItems, 2, "dlc-pack", "dlc-pack-ver", game, "dlc-pack-tr")}
+		</details></br>
 
-		<b>Palicoes (${palicoes.length})</b>
-		${sectionControlsHtml("palico", true)}</br>
-		<span style="font-size: 11px; color: grey;">Palicoes with no GEN release at all (Sanrio, Macross Delta, and other JP-only collabs) are included at the end of the list, injectable into a GEN save too. The Original/Translated toggle affects name, comment, and namegiver text together - "Translated" always writes English (community-translated for the JP-only ones), independent of which version's bytes get written.</span></br>
-		${renderGridTable(palicoItems, 4, "dlc-palico", "dlc-palico-ver", game, "dlc-palico-tr")}</br>
+		<details open>
+			<summary><b>Palicoes (${palicoes.length})</b></summary>
+			${sectionControlsHtml("palico", true)}</br>
+			<span style="font-size: 11px; color: grey;">Palicoes with no GEN release at all (Sanrio, Macross Delta, and other JP-only collabs) are included at the end of the list, injectable into a GEN save too. The Original/Translated toggle affects name, comment, and namegiver text together - "Translated" always writes English (community-translated for the JP-only ones), independent of which version's bytes get written.</span></br>
+			${renderGridTable(palicoItems, 4, "dlc-palico", "dlc-palico-ver", game, "dlc-palico-tr")}
+		</details></br>
 
-		<b>Challenge/Arena Quests (${challengeQuests.length})</b>
-		${sectionControlsHtml("cquest")}</br>
-		${renderGridTable(challengeQuests.map(questItem), 3, "dlc-cquest", "dlc-cquest-ver", game)}</br>
+		<details>
+			<summary><b>Challenge/Arena Quests (${challengeQuests.length})</b></summary>
+			${sectionControlsHtml("cquest")}</br>
+			${renderGridTable(challengeQuests.map(questItem), 3, "dlc-cquest", "dlc-cquest-ver", game)}
+		</details></br>
 
-		<b>Event Quests (${eventQuests.length})</b>
-		${sectionControlsHtml("equest")}</br>
-		${game === 0 ? `<span style="font-size: 11px; color: grey;">The last ${extraQuests.length} have no GEN release at all (Sanrio/Capcom/Macross Delta collabs) - included here since quest IDs are shared safely between games, unchecked by default since GEN wouldn't normally offer them.</span></br>` : ``}
-		${renderGridTable(eventQuests.map(questItem), 3, "dlc-equest", "dlc-equest-ver", game)}</br>
+		<details>
+			<summary><b>Event Quests (${eventQuests.length})</b></summary>
+			${sectionControlsHtml("equest")}</br>
+			${renderGridTable(eventQuests.map(questItem), 3, "dlc-equest", "dlc-equest-ver", game)}
+		</details></br>
 
 		<button id="run_dlc">Inject Selected</button>
 		<span style="margin-left: 20px;">
@@ -492,20 +495,14 @@ function openDLCWindow(){
 	wireSectionControls(popup, "pack", "dlc-pack", "dlc-pack-ver", game, null, "dlc-pack-tr");
 	wireSectionControls(popup, "palico", "dlc-palico", "dlc-palico-ver", game, null, "dlc-palico-tr");
 	wireSectionControls(popup, "cquest", "dlc-cquest", "dlc-cquest-ver", game);
-	wireSectionControls(popup, "equest", "dlc-equest", "dlc-equest-ver", game, new Set(extraQuests.map(q => q.id)));
+	wireSectionControls(popup, "equest", "dlc-equest", "dlc-equest-ver", game);
 
 	document.getElementById("run_dlc").addEventListener("click", runDLCInject);
 
 	// One-click shortcuts that set every checkbox in the whole popup (not
-	// just one section) and immediately apply the result - "Add all DLC"
-	// still respects the MHX-exclusive-quests-not-checked-by-default rule
-	// (same exclusion "Set to Default" uses); "Remove all DLC" clears
-	// everything, extras included, since removing is always safe to be
-	// thorough about.
-	var extraQuestIds = new Set(extraQuests.map(q => q.id));
+	// just one section) and immediately apply the result.
 	document.getElementById("add_all_dlc").addEventListener("click", () => {
-		popup.querySelectorAll(".dlc-pack, .dlc-palico, .dlc-cquest").forEach(cb => cb.checked = true);
-		popup.querySelectorAll(".dlc-equest").forEach(cb => { if (!extraQuestIds.has(parseInt(cb.dataset.key))) cb.checked = true; });
+		popup.querySelectorAll(".dlc-pack, .dlc-palico, .dlc-cquest, .dlc-equest").forEach(cb => cb.checked = true);
 		runDLCInject();
 	});
 	document.getElementById("remove_all_dlc").addEventListener("click", () => {
@@ -567,7 +564,6 @@ function runDLCInject(){
 	var otherPalicoes = palicoesForGame(game === 0 ? 1 : 0);
 	var itemPacks = itemPacksForGame(game);
 	var otherItemPacks = itemPacksForGame(game === 0 ? 1 : 0);
-	var extraQuests = (game === 0) ? mhxExclusiveQuestsForGen() : [];
 
 	var large = game === 0;
 
@@ -601,9 +597,8 @@ function runDLCInject(){
 	var palicoRange = tableRange(palicoes);
 	resetRangeFromTemplate(save.data, cleanTemplate, palicoRange[0], palicoRange[1]);
 
-	var allQuestsList = quests.concat(extraQuests);
 	var otherQuestById = new Map(otherQuests.map(q => [q.id, q]));
-	var questsToInject = allQuestsList
+	var questsToInject = quests
 		.filter(q => sel.quests.has(q.id))
 		.map(q => {
 			if (sel.questVersion.has(q.id) && otherQuestById.has(q.id)){

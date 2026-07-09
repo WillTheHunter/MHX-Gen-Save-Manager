@@ -260,6 +260,15 @@ body{
 	margin-bottom: 10px;
 }
 
+.cat-window summary{
+	cursor: pointer;
+	user-select: none;
+}
+
+.cat-window details > *:not(summary){
+	margin-top: 8px;
+}
+
 .cat-window button{
     padding: 5px 10px;
     font-size: 12px;
