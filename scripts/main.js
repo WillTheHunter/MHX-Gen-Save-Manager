@@ -216,7 +216,12 @@ function getDLCSelection(game){
 			itemPackTranslated: new Set(), // indices writing translated (EN) text instead of original
 			palicoes: new Set(palicoesForGame(game).map((p, i) => i)),
 			palicoVersion: new Set(), // indices using the OTHER game's version
-			palicoTranslated: new Set() // indices writing translated (EN) text instead of original
+			palicoTranslated: new Set(), // indices writing translated (EN) text instead of original
+			// indices whose optional "also inject the other region's cosmetic
+			// twin" checkbox (e.g. Ranger/Mojave, which share one in-game
+			// catalog ID and would otherwise visually collide) is checked -
+			// on by default for every entry that has one.
+			palicoExtra: new Set(palicoesForGame(game).map((p, i) => i).filter(i => palicoesForGame(game)[i].extraPatches))
 		};
 	}
 	return dlcSelection[game];
@@ -256,6 +261,10 @@ function renderGridTable(items, cols, checkboxClass, versionClass, game, transla
 				}
 				if (translationClass && item.hasTranslation){
 					html += ` ` + translationToggleHtml(translationClass, item.key, item.useTranslated, item.translationVisible);
+				}
+				if (item.extraName){
+					html += `</br><label style="font-size: 10px;"><input type="checkbox" class="${checkboxClass}-extra" data-key="${item.key}" ${item.extraChecked ? "checked" : ""}>
+						Also add ${escapeHtml(item.extraName)}</label>`;
 				}
 			}
 			html += `</td>`;
@@ -405,7 +414,7 @@ function openDLCWindow(){
 	// against its translated text directly - most appended orphans are
 	// JP-exclusive content (translatedName differs from name, so the toggle
 	// is meaningful), but a GEN-exclusive Palico appended to MHX's list
-	// (e.g. Ranger, a cosmetic recolor of MHX's own Mojavu with no real MHX
+	// (e.g. Ranger, a cosmetic recolor of MHX's own Mojave with no real MHX
 	// release of its own) is already English natively, so translating it
 	// would be a no-op just like a native GEN entry - comparing name vs
 	// translatedName handles both cases correctly without needing to know
@@ -431,7 +440,8 @@ function openDLCWindow(){
 			key: i, checked: sel.palicoes.has(i), label: p.displayName,
 			pairLabel: p.pairDisplayName, useOther: useOther,
 			hasTranslation: !!p.translatedName, translationVisible: effectiveGame(useOther, !!p.pairPatches, p) === 1,
-			useTranslated: sel.palicoTranslated.has(i), skill: p.skill
+			useTranslated: sel.palicoTranslated.has(i), skill: p.skill,
+			extraName: p.extraName, extraChecked: sel.palicoExtra.has(i)
 		};
 	});
 
@@ -547,6 +557,7 @@ function syncDLCSelectionFromPopup(){
 	sel.palicoes = checkedKeys(".dlc-palico");
 	sel.palicoVersion = versionKeys(".dlc-palico-ver");
 	sel.palicoTranslated = versionKeys(".dlc-palico-tr");
+	sel.palicoExtra = checkedKeys(".dlc-palico-extra");
 
 	sel.quests = new Set([...checkedKeys(".dlc-cquest"), ...checkedKeys(".dlc-equest")]);
 	sel.questVersion = new Set([...versionKeys(".dlc-cquest-ver"), ...versionKeys(".dlc-equest-ver")]);
@@ -588,6 +599,7 @@ function runDLCInject(){
 		list.forEach(p => {
 			p.patches.forEach(([a]) => { if (a < lo) lo = a; if (a > hi) hi = a; });
 			if (p.pairPatches) p.pairPatches.forEach(([a]) => { if (a < lo) lo = a; if (a > hi) hi = a; });
+			if (p.extraPatches) p.extraPatches.forEach(([a]) => { if (a < lo) lo = a; if (a > hi) hi = a; });
 		});
 		return [lo, hi + 1];
 	}
@@ -639,6 +651,13 @@ function runDLCInject(){
 				if (textSource.translatedName){
 					bonusPatches.push(...buildPalicoTranslationOverlay(patches, textSource.translatedName, textSource.translatedComment, textSource.translatedNamegiver));
 				}
+			}
+			// Optional "also install the other region's cosmetic twin"
+			// (Ranger/Mojave) - a separate record at its own free slot, not
+			// part of the GEN/MHX version toggle above. Left at the
+			// already-wiped clean-template default when unchecked.
+			if (p.extraPatches && sel.palicoExtra.has(i)){
+				bonusPatches.push(...p.extraPatches);
 			}
 			anyPalico = true;
 		}
