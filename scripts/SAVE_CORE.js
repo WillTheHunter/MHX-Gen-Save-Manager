@@ -66,8 +66,142 @@ function coreReadClaimedPackMask(slotData)
 
 function coreWriteClaimedPackMask(slotData, mask)
 {
-    slotData[ITEM_PACK_CLAIM_OFFSET] = mask & 0xFF;
-    slotData[ITEM_PACK_CLAIM_OFFSET + 1] = (mask >>> 8) & 0xFF;
+    coreWriteU16(slotData, ITEM_PACK_CLAIM_OFFSET, mask);
+}
+
+function coreWriteU16(data, offset, value)
+{
+    data[offset] = value & 0xFF;
+    data[offset + 1] = (value >>> 8) & 0xFF;
+}
+
+// Persistent "lifetime claimed" record per item-pack VERSION per character
+// slot - separate from the single real claimed-mask above, which only ever
+// reflects whichever version (GEN's own catalog or MHX's own) is CURRENTLY
+// installed in the save's one shared item-pack table. Without this, a user
+// could claim GEN's packs, cross-inject MHX's packs over them, claim those
+// too, then switch back to GEN and reclaim the same packs a second time -
+// the single real field has no memory of what was already claimed under a
+// version that's no longer installed. These are absolute (not character-
+// slot-relative) file offsets, confirmed unused (all zero) across every
+// real reference save in this project regardless of region, DLC, or claim
+// state, in a fixed 12-byte range the user identified specifically for
+// this: one GEN + one MHX uint16 mask per character slot, back to back.
+//   0x3B1C-0x3B1D: slot 0 GEN-version claimed mask
+//   0x3B1E-0x3B1F: slot 0 MHX-version claimed mask
+//   0x3B20-0x3B21: slot 1 GEN-version claimed mask
+//   0x3B22-0x3B23: slot 1 MHX-version claimed mask
+//   0x3B24-0x3B25: slot 2 GEN-version claimed mask
+//   0x3B26-0x3B27: slot 2 MHX-version claimed mask
+const PACK_CLAIM_HISTORY_BASE = 0x3B1C;
+
+function packClaimHistoryOffset(slotIndex, version)
+{
+    // version: 0 = GEN content, 1 = MHX content
+    return PACK_CLAIM_HISTORY_BASE + slotIndex * 4 + version * 2;
+}
+
+function coreReadPackClaimHistory(data, slotIndex, version)
+{
+    return coreReadU16(data, packClaimHistoryOffset(slotIndex, version));
+}
+
+function coreWritePackClaimHistory(data, slotIndex, version, mask)
+{
+    coreWriteU16(data, packClaimHistoryOffset(slotIndex, version), mask);
+}
+
+// Determines which catalog (GEN's own or MHX's own) ONE pack's CURRENTLY
+// installed bytes match, independent of which region the save FILE itself
+// is - a pack's own address always holds either its native-region bytes
+// (`.patches`) or the other region's bytes rebased onto this save's own
+// addressing (`.pairPatches`, written by this tool's own GEN/MHX per-pack
+// toggle). Returns 0 (GEN), 1 (MHX), or null (never installed / neither
+// matches). Deliberately per-PACK, not per-table - a save can genuinely
+// have some packs native and others toggled at once (e.g. only pack 0 was
+// ever swapped before this safety feature existed), and the claim-history
+// tracking below needs to attribute each pack's claim to the right catalog
+// individually rather than only handling an all-or-nothing switch.
+//
+// Uses a "clearly the better match" comparison rather than requiring every
+// single patched byte to match exactly - a real, already-claimed pack 10/11
+// on a genuine played save was found (via this feature's own verification)
+// to differ from the clean `.patches` reference by a handful of bytes
+// (e.g. 1/54, 8/58) while still being unmistakably that pack's own native
+// content (>98%/86% match, vs <10%/5% for the other region's bytes) - some
+// part of a pack's own record evidently isn't perfectly static once
+// claimed/consumed by real gameplay. Requiring 100% would silently exclude
+// exactly the well-worn, already-claimed real saves this safety feature
+// most needs to work correctly on.
+function detectSinglePackVersion(data, pack, game)
+{
+    function matchRatio(patches){
+        if (!patches) return -1;
+        let mismatches = 0;
+        patches.forEach(([addr, val]) => { if (data[addr] !== val) mismatches++; });
+        return 1 - (mismatches / patches.length);
+    }
+    const nativeMatch = matchRatio(pack.patches);
+    const otherMatch = matchRatio(pack.pairPatches);
+    if (nativeMatch >= 0.75 && nativeMatch > otherMatch) return game;
+    if (otherMatch >= 0.75 && otherMatch > nativeMatch) return 1 - game;
+    return null;
+}
+
+// Folds whatever's genuinely claimed RIGHT NOW into each pack's own
+// currently-installed catalog's history - OR only, so a claim is
+// remembered forever once observed and can never be un-recorded. Safe to
+// call any time the pack table + real claimed-mask are both in a stable
+// state (not mid-wipe): right before runDLCInject() wipes the pack table
+// (so the OUTGOING catalog's last known claims aren't lost) AND every time
+// the Reclaim window opens (so a save the tool has never touched before -
+// pure real-gameplay claims, no prior Inject DLC run - still gets correct,
+// un-cheatable history the very first time it's viewed, not just after the
+// first catalog switch made through this tool).
+function absorbPackClaimsIntoHistory(data, slotData, slotIndex, itemPacks, game)
+{
+    const realMask = coreReadClaimedPackMask(slotData);
+    const historyCache = {};
+    itemPacks.forEach((p, i) => {
+        const version = detectSinglePackVersion(data, p, game);
+        if (version === null || !(realMask & (1 << i))) return;
+        if (!(version in historyCache)) historyCache[version] = coreReadPackClaimHistory(data, slotIndex, version);
+        historyCache[version] |= (1 << i);
+    });
+    for (const v in historyCache) coreWritePackClaimHistory(data, slotIndex, Number(v), historyCache[v]);
+}
+
+// Rebuilds the real claimed-mask bit by bit from each pack's CURRENTLY
+// installed catalog's own history - a full replace, not an OR, since the
+// real mask is slot-relative and completely separate from the (just-wiped
+// and reinstalled) shared pack table, so right after a catalog switch it
+// still holds the OUTGOING catalog's stale bits, which must not leak into
+// whatever's freshly installed. Called after runDLCInject() finishes
+// installing a new selection.
+function restorePackClaimsFromHistory(data, slotData, slotIndex, itemPacks, game)
+{
+    let newMask = 0;
+    itemPacks.forEach((p, i) => {
+        const version = detectSinglePackVersion(data, p, game);
+        if (version !== null && (coreReadPackClaimHistory(data, slotIndex, version) & (1 << i))) newMask |= (1 << i);
+    });
+    coreWriteClaimedPackMask(slotData, newMask);
+}
+
+// Which packs are locked (already claimed under their currently-installed
+// catalog, ever, per absorbPackClaimsIntoHistory/restorePackClaimsFromHistory
+// above) - always identical to the real claimed-mask immediately after
+// either of those runs, since a claim becomes locked the instant it's
+// observed. Exposed separately since the Reclaim UI needs this mask to
+// decide which checkboxes to disable.
+function packClaimLockedMask(data, itemPacks, game, slotIndex)
+{
+    let locked = 0;
+    itemPacks.forEach((p, i) => {
+        const version = detectSinglePackVersion(data, p, game);
+        if (version !== null && (coreReadPackClaimHistory(data, slotIndex, version) & (1 << i))) locked |= (1 << i);
+    });
+    return locked;
 }
 
 function coreReadU32(data, offset)

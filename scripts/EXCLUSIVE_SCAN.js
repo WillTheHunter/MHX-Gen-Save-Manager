@@ -53,10 +53,59 @@ function scanExclusiveContent(save)
     return results;
 }
 
+// Lightweight, deterministic, reversible obfuscation for the exported
+// removed-content JSON's actual item/equipment list - NOT real cryptographic
+// security (this is a client-side tool; the cipher is sitting right here in
+// plain sight for anyone who looks), just enough friction that the file
+// can't be casually hand-edited (e.g. bumping a quantity, or re-adding an
+// entry that was supposed to be gone) before re-importing it. The key is
+// the character slot's own hunter name, embedded in cleartext right next to
+// its block (it has to be, since importRemovedContent needs to know which
+// key decrypts which block) - so this is obscurity against casual editing,
+// not protection against a determined user reading this file.
+function slotBlockKeystream(key, length)
+{
+    const keyBytes = new TextEncoder().encode(key || "");
+    const out = new Uint8Array(length);
+    let h = 0x811c9dc5; // FNV-1a offset basis
+    for (let i = 0; i < length; i++){
+        const kb = keyBytes.length ? keyBytes[i % keyBytes.length] : 0;
+        h ^= (kb + i);
+        h = Math.imul(h, 0x01000193) >>> 0; // FNV prime mix
+        out[i] = h & 0xFF;
+    }
+    return out;
+}
+
+function encryptSlotBlock(key, entries)
+{
+    const bytes = new TextEncoder().encode(JSON.stringify(entries));
+    const keystream = slotBlockKeystream(key, bytes.length);
+    const cipher = new Uint8Array(bytes.length);
+    for (let i = 0; i < bytes.length; i++) cipher[i] = bytes[i] ^ keystream[i];
+    let binary = "";
+    cipher.forEach(b => { binary += String.fromCharCode(b); });
+    return btoa(binary);
+}
+
+function decryptSlotBlock(key, base64Data)
+{
+    const binary = atob(base64Data);
+    const cipher = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) cipher[i] = binary.charCodeAt(i);
+    const keystream = slotBlockKeystream(key, cipher.length);
+    const bytes = new Uint8Array(cipher.length);
+    for (let i = 0; i < cipher.length; i++) bytes[i] = cipher[i] ^ keystream[i];
+    return JSON.parse(new TextDecoder().decode(bytes));
+}
+
 // Clears/fixes every detected entry from the save (in place) and returns a
 // JSON-able record of exactly what was removed, so it can be restored later
 // (see importRemovedContent) - each equipment entry keeps its full 36 raw
-// bytes so decorations etc. survive a round trip losslessly.
+// bytes so decorations etc. survive a round trip losslessly. The removed
+// list itself is grouped by slot and encrypted per-slot (see
+// encryptSlotBlock above) - one block per slot name, keyed by that slot's
+// own name.
 //
 // Items (pouch/item box) are simply zeroed out - confirmed correct against
 // a real inventoried save (exclusive item ids cleanly disappear, id=0/qty=0,
@@ -83,23 +132,42 @@ function scanExclusiveContent(save)
 function removeExclusiveContent(save)
 {
     const scanResults = scanExclusiveContent(save);
-    const removed = [];
+    const removedBySlot = new Map();
+    let totalRemoved = 0;
 
-    scanResults.forEach(({ slot, entries }) => {
+    scanResults.forEach(({ slot, name: slotName, entries }) => {
         const slotData = save.save_slots[slot].data;
+        const removed = [];
         entries.forEach(e => {
             if (e.category === "pouch") coreWriteItemSlot(slotData, POUCH_OFFSET, e.index, 0, 0);
             else if (e.category === "itemBox") coreWriteItemSlot(slotData, ITEM_BOX_OFFSET, e.index, 0, 0);
             else if (e.category === "equipmentBox") coreSetEquipmentId(slotData, EQUIPMENT_BOX_OFFSET, e.index, 1);
             else if (e.category === "palicoEquipmentBox") coreSetEquipmentId(slotData, PALICO_EQUIPMENT_OFFSET, e.index, 1);
-            removed.push(Object.assign({ slot, slotName: save.save_slots[slot].name }, e));
+            removed.push(e);
         });
+        if (removed.length){
+            // Two populated slots sharing a hunter name merge into one block
+            // - they'd share the same decryption key anyway, and re-import
+            // always targets a user-chosen slot regardless of origin, so
+            // nothing is lost by combining them.
+            const existing = removedBySlot.get(slotName) || [];
+            removedBySlot.set(slotName, existing.concat(removed));
+            totalRemoved += removed.length;
+        }
     });
 
+    const blocks = [...removedBySlot.entries()].map(([slotName, entries]) => ({
+        slotName,
+        count: entries.length,
+        data: encryptSlotBlock(slotName, entries)
+    }));
+
     return {
+        _comment: "blocks encrypted to avoid cheating",
         sourceRegion: save.game === 0 ? "GEN" : "MHX",
         exportedAt: new Date().toISOString(),
-        removed
+        totalRemoved,
+        blocks
     };
 }
 
@@ -114,11 +182,18 @@ function removeExclusiveContent(save)
 function importRemovedContent(save, destSlot, jsonData)
 {
     const expectedRegion = save.game === 0 ? "GEN" : "MHX";
-    if (!jsonData || !Array.isArray(jsonData.removed)){
+    if (!jsonData || !Array.isArray(jsonData.blocks)){
         throw new Error("This doesn't look like a valid removed-items file.");
     }
     if (jsonData.sourceRegion !== expectedRegion){
         throw new Error(`This file contains ${jsonData.sourceRegion}-exclusive content, but the currently loaded save is ${expectedRegion === "GEN" ? "MHGen" : "MHX"} - ${jsonData.sourceRegion}-exclusive items/equipment can't exist in a ${expectedRegion === "GEN" ? "MHGen" : "MHX"} save, so importing them here isn't possible.`);
+    }
+
+    let removed;
+    try {
+        removed = jsonData.blocks.flatMap(block => decryptSlotBlock(block.slotName, block.data));
+    } catch (err){
+        throw new Error("Couldn't read this file's contents - it looks corrupted or was hand-edited.");
     }
 
     const slotData = save.save_slots[destSlot].data;
@@ -134,7 +209,7 @@ function importRemovedContent(save, destSlot, jsonData)
 
     const summary = { imported: [], skippedFull: [] };
 
-    jsonData.removed.forEach(entry => {
+    removed.forEach(entry => {
         if (entry.category === "pouch" || entry.category === "itemBox"){
             const idx = nextEmptyItemSlot();
             if (idx === -1){ summary.skippedFull.push(entry); return; }

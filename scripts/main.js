@@ -283,8 +283,11 @@ function renderGridTable(items, cols, checkboxClass, versionClass, game, transla
 			if (idx < items.length){
 				var item = items[idx];
 				var shownLabel = (item.useOther && item.pairLabel) ? item.pairLabel : item.label;
-				html += `<input type="checkbox" class="${checkboxClass}" data-key="${item.key}" ${item.checked ? "checked" : ""}>
+				html += `<input type="checkbox" class="${checkboxClass}" data-key="${item.key}" ${item.checked ? "checked" : ""} ${item.locked ? "disabled" : ""}>
 					<label><span class="item-name-label">${escapeHtml(shownLabel)}</span></label>`;
+				if (item.locked){
+					html += ` <b style="color:#ff8080; font-size: 10px;">(locked)</b>`;
+				}
 				if (item.skill){
 					html += `</br><span style="font-size: 10px; color: #7fd0a0;">${escapeHtml(item.skill)}</span>`;
 				}
@@ -610,6 +613,18 @@ function runDLCInject(){
 
 	var large = game === 0;
 
+	// Item-pack claim-history safety check: before the shared item-pack table
+	// gets wiped below, fold each populated slot's CURRENT real claimed-mask
+	// into whichever catalog each individual pack currently shows (per-pack,
+	// not one version for the whole table - a save can have some packs GEN
+	// and others MHX at once) - see absorbPackClaimsIntoHistory in
+	// SAVE_CORE.js. Must run before ANY mutation below, since it reads the
+	// table this same call is about to overwrite.
+	for (var histSlot = 0; histSlot < 3; histSlot++){
+		if (!save.slots[histSlot]) continue;
+		absorbPackClaimsIntoHistory(save.data, save.save_slots[histSlot].data, histSlot, itemPacks, game);
+	}
+
 	// Quest table, item-pack table, and Palico table are all wiped COMPLETELY
 	// before reinstalling the current selection, rather than only patching
 	// addresses the currently-selected version happens to use. Packs/Palicoes
@@ -713,6 +728,7 @@ function runDLCInject(){
 			anyPack = true;
 		}
 	});
+
 	// GEN_DLC_BONUS_FLAGS/MHX_DLC_BONUS_FLAGS: a "bonus content available" flag
 	// region sitting in the DLC section header, just before the item-pack
 	// table - found by diffing the original MH-Gen-X-DLC-Save-Injector's
@@ -734,6 +750,18 @@ function runDLCInject(){
 
 	save.init();
 	save.readSlots();
+
+	// Now safe to rebuild each slot's real claimed-mask from whatever's
+	// freshly installed (per pack, via restorePackClaimsFromHistory) -
+	// save_slots[i].data was just recreated fresh from save.data above, so
+	// this is the copy that will actually survive into buildOutputInPlace()
+	// at export time (see the note on that copy-vs-view gotcha elsewhere in
+	// this project's memory).
+	for (var restoreSlot = 0; restoreSlot < 3; restoreSlot++){
+		if (!save.slots[restoreSlot]) continue;
+		restorePackClaimsFromHistory(save.data, save.save_slots[restoreSlot].data, restoreSlot, itemPacks, game);
+	}
+
 	displayInfo(save);
 	closeWindow();
 
@@ -838,7 +866,18 @@ var REGION_INCOMPATIBLE_ITEMS = {
 function openReclaimWindow(slot){
 	var game = save.game;
 	var itemPacks = itemPacksForGame(game);
+
+	// Fold whatever's genuinely claimed right now into each pack's own
+	// currently-installed catalog's history BEFORE computing anything else -
+	// this is what makes a save the tool has never touched before (pure
+	// real-gameplay claims, no prior Inject DLC run) show correct locks the
+	// very first time this window is opened, instead of only catching up
+	// after the first catalog switch made through Inject DLC. See
+	// absorbPackClaimsIntoHistory/packClaimLockedMask in SAVE_CORE.js.
+	absorbPackClaimsIntoHistory(save.data, save.save_slots[slot].data, slot, itemPacks, game);
+
 	var mask = coreReadClaimedPackMask(save.save_slots[slot].data);
+	var lockedMask = packClaimLockedMask(save.data, itemPacks, game, slot);
 
 	// Prefer whatever's actually installed in each slot right now (read live
 	// from save.data) over the region's standard pack list - a slot can hold
@@ -849,8 +888,11 @@ function openReclaimWindow(slot){
 	// populated at all).
 	var installedNames = readInstalledPackNames(itemPacks, save.data);
 
+	var claimedCount = itemPacks.reduce((n, p, i) => n + ((mask & (1 << i)) ? 1 : 0), 0);
+
 	var items = itemPacks.map((p, i) => ({
-		key: i, checked: (mask & (1 << i)) !== 0, label: installedNames[i] || p.displayName
+		key: i, checked: (mask & (1 << i)) !== 0, label: installedNames[i] || p.displayName,
+		locked: (lockedMask & (1 << i)) !== 0
 	}));
 
 	var popup = document.getElementById("popup");
@@ -861,7 +903,11 @@ function openReclaimWindow(slot){
 			mark it unclaimed again, so it can be redeemed in-game. Mainly useful right
 			after a region transfer (MHGen &harr; MHX), since the new game's item packs are
 			a completely different campaign but this flag carries over as-is.
-		</span></br></br>
+			Packs marked <b style="color:#ff8080;">(locked)</b> have already been claimed under
+			whichever catalog (GEN's or MHX's) currently occupies that slot, on this character,
+			at some point - can't be marked unclaimed again, even after switching away and back.
+		</span></br>
+		<b>Claimed: ${claimedCount}/${itemPacks.length}</b> (${itemPacks.length - claimedCount} left to redeem)</br></br>
 		<span style="margin-left: 10px;">
 			<button id="reclaim_none" style="height:22px;">Uncheck All</button>
 			<button id="reclaim_all" style="height:22px;">Check All</button>
@@ -872,7 +918,7 @@ function openReclaimWindow(slot){
 	</div>`;
 
 	document.getElementById("reclaim_none").addEventListener("click", () => {
-		popup.querySelectorAll(".reclaim-pack").forEach(cb => cb.checked = false);
+		popup.querySelectorAll(".reclaim-pack:not(:disabled)").forEach(cb => cb.checked = false);
 	});
 	document.getElementById("reclaim_all").addEventListener("click", () => {
 		popup.querySelectorAll(".reclaim-pack").forEach(cb => cb.checked = true);
@@ -885,12 +931,26 @@ function openReclaimWindow(slot){
 
 function applyReclaim(slot){
 	var popup = document.getElementById("popup");
-	var newMask = 0;
+	var game = save.game;
+	var itemPacks = itemPacksForGame(game);
+
+	// lockedMask is OR'd in unconditionally (not just relied on via the
+	// checkbox's disabled attribute) so a locked pack can never end up
+	// unclaimed in the real field, even if something else left its checkbox
+	// enabled.
+	var newMask = packClaimLockedMask(save.data, itemPacks, game, slot);
 	popup.querySelectorAll(".reclaim-pack").forEach(cb => {
 		if (cb.checked) newMask |= (1 << parseInt(cb.dataset.key));
 	});
 
 	coreWriteClaimedPackMask(save.save_slots[slot].data, newMask);
+
+	// Whatever the user just (re)confirmed as claimed - including a
+	// previously-unlocked pack they just checked for the first time - is
+	// now permanently on record for this catalog too, same as a claim
+	// observed any other way.
+	absorbPackClaimsIntoHistory(save.data, save.save_slots[slot].data, slot, itemPacks, game);
+
 	closeWindow();
 	alert(`Updated claimed item packs for "${save.save_slots[slot].name}". Export the save to keep this change.`);
 }
@@ -921,7 +981,7 @@ function autoResolveTransfer(){
 
 	var record = removeExclusiveContent(save);
 	saveJSON(record, `removed_${record.sourceRegion}_exclusive_content.json`);
-	var msg = `Removed ${record.removed.length} region-exclusive entr${record.removed.length === 1 ? "y" : "ies"}. Export your save to keep this change - the downloaded JSON file lets you restore them later if you return to this region.`;
+	var msg = `Removed ${record.totalRemoved} region-exclusive entr${record.totalRemoved === 1 ? "y" : "ies"}. Export your save to keep this change - the downloaded JSON file lets you restore them later if you return to this region.`;
 	alert(msg);
 	openCompatWindow();
 }
@@ -1007,7 +1067,7 @@ function openCompatWindow(){
 				reader.onload = e => {
 					try {
 						pendingImportJSON = JSON.parse(e.target.result);
-						var count = pendingImportJSON.removed ? pendingImportJSON.removed.length : "?";
+						var count = pendingImportJSON.totalRemoved !== undefined ? pendingImportJSON.totalRemoved : "?";
 						document.getElementById("import_exclusive_file_label").textContent = `${file.name} (${count} entries, ${pendingImportJSON.sourceRegion || "unknown region"})`;
 					} catch (err){
 						pendingImportJSON = null;

@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Removed-Content Decryptor</title>
+<style>
+	body { font-family: sans-serif; background: #222; color: #eee; padding: 20px; max-width: 900px; margin: 0 auto; }
+	h1 { font-size: 18px; }
+	p.meta { font-size: 12px; color: #999; }
+	input[type=file] { margin: 14px 0; }
+	.block { border: 1px solid #555; border-radius: 6px; padding: 10px 14px; margin-bottom: 14px; }
+	.block h2 { margin: 0 0 8px 0; font-size: 14px; color: #7fd0a0; }
+	table { border-collapse: collapse; width: 100%; font-size: 12px; }
+	th, td { border: 1px solid #444; padding: 4px 8px; text-align: left; }
+	th { background: #333; }
+	.error { color: #ff8080; }
+	.summary { font-size: 13px; margin: 10px 0; }
+</style>
+</head>
+<body>
+
+<h1>Removed-Content Decryptor</h1>
+<p class="meta">
+	Loads a <code>removed_&lt;region&gt;_exclusive_content.json</code> file exported by the
+	MHGen/MHX Save Manager's "Auto-resolve transfer" feature and decrypts it for viewing.
+	Each block's decryption key is its own character slot name, stored in cleartext right
+	next to it - nothing to type in, just choose the file below.
+</p>
+
+<input type="file" id="file_input" accept=".json">
+<div id="output"></div>
+
+<script src="decrypt_viewer.js"></script>
+<script>
+document.getElementById("file_input").addEventListener("change", (e) => {
+	var file = e.target.files[0];
+	if (!file) return;
+
+	var output = document.getElementById("output");
+	output.innerHTML = "";
+
+	var reader = new FileReader();
+	reader.onload = (ev) => {
+		try {
+			var jsonData = JSON.parse(ev.target.result);
+			var decrypted = decryptFile(jsonData);
+
+			var summary = document.createElement("div");
+			summary.className = "summary";
+			summary.innerHTML = `<b>Source region:</b> ${jsonData.sourceRegion || "unknown"}
+				&middot; <b>Exported at:</b> ${jsonData.exportedAt || "unknown"}
+				&middot; <b>Total removed:</b> ${jsonData.totalRemoved !== undefined ? jsonData.totalRemoved : "?"}`;
+			output.appendChild(summary);
+
+			decrypted.forEach(block => {
+				var div = document.createElement("div");
+				div.className = "block";
+				var rows = block.entries.map(entry => {
+					var detail = (entry.category === "pouch" || entry.category === "itemBox")
+						? `id ${entry.id}, qty ${entry.qty}`
+						: `type ${entry.type}, id ${entry.id}, level ${entry.level + 1}`;
+					return `<tr><td>${entry.category}</td><td>${entry.index}</td><td>${entry.name}</td><td>${detail}</td></tr>`;
+				}).join("");
+				div.innerHTML = `<h2>${block.slotName} (${block.count} entries)</h2>
+					<table>
+						<tr><th>Category</th><th>Index</th><th>Name</th><th>Detail</th></tr>
+						${rows}
+					</table>`;
+				output.appendChild(div);
+			});
+		} catch (err){
+			var p = document.createElement("p");
+			p.className = "error";
+			p.textContent = "Couldn't decrypt this file: " + err.message;
+			output.appendChild(p);
+		}
+	};
+	reader.readAsText(file);
+});
+</script>
+
+</body>
+</html>
