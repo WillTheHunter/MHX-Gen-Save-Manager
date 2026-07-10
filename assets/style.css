@@ -297,6 +297,10 @@ body{
 }
 
 .footer a{
-	color: #959396;
+	color: #4da6ff;
 	text-decoration: none;
+}
+
+.footer a:hover{
+	text-decoration: underline;
 }

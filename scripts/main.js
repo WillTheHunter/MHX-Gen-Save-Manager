@@ -16,6 +16,19 @@ var saveByteArray = (function (){
 	};
 }());
 
+function saveJSON(obj, name){
+	var blob = new Blob([JSON.stringify(obj, null, 2)], {type: "application/json"}),
+		url = window.URL.createObjectURL(blob),
+		a = document.createElement("a");
+	a.style.display = "none";
+	a.href = url;
+	a.download = name;
+	document.body.appendChild(a);
+	a.click();
+	document.body.removeChild(a);
+	window.URL.revokeObjectURL(url);
+}
+
 function gameName(game){
 	return game === 1 ? "MHX (JPN)" : "MHGen (EUR/USA)";
 }
@@ -174,6 +187,25 @@ function importSlot(slot){
 // this only shows up on real hardware) - always write both, identical.
 function exportSave(){
 	var targetGame = parseInt(document.getElementById("dropdown").value);
+
+	// Only relevant for an actual region conversion (not a same-region
+	// re-export) - check whether the save currently carries any content
+	// exclusive to its OWN region, since that's exactly what would show
+	// broken/missing after landing in the other region. Don't just warn -
+	// send the user straight to the compatibility check window (which has
+	// both the details and the Auto-resolve button) and abort this export;
+	// re-clicking Export save after resolving it (or if the scan comes back
+	// clean) proceeds normally with no interruption.
+	if (targetGame !== save.game){
+		var scanResults = scanExclusiveContent(save);
+		var total = scanResults.reduce((n, r) => n + r.entries.length, 0);
+		if (total > 0){
+			alert(`This save has ${total} item/equipment/Palico gear entr${total === 1 ? "y" : "ies"} exclusive to ${gameName(save.game)} that ${gameName(targetGame)} doesn't have. If you don't remove these, your save might break after the transfer.\n\nOpening the region-transfer compatibility check - use "Auto-resolve transfer" there, or remove them manually, then export again.`);
+			openCompatWindow();
+			return;
+		}
+	}
+
 	// Same region as currently loaded -> reuse the loaded file as the base, so
 	// injected DLC (which patches save.data directly) and anything else outside
 	// the 3 character slots survives. Actual region conversion still has to
@@ -863,20 +895,94 @@ function applyReclaim(slot){
 	alert(`Updated claimed item packs for "${save.save_slots[slot].name}". Export the save to keep this change.`);
 }
 
+function categoryLabel(cat){
+	return { pouch: "Pouch", itemBox: "Item Box", equipmentBox: "Equipment Box", palicoEquipmentBox: "Palico Equipment Box" }[cat] || cat;
+}
+
+function describeExclusiveEntry(e){
+	if (e.category === "pouch" || e.category === "itemBox"){
+		return `${escapeHtml(e.name)} x${e.qty} (id ${e.id})`;
+	}
+	return `${escapeHtml(e.name)} (type ${e.type}, id ${e.id}, level ${e.level + 1})`;
+}
+
+function autoResolveTransfer(){
+	if (!save) return;
+	var scanResults = scanExclusiveContent(save);
+	var total = scanResults.reduce((n, r) => n + r.entries.length, 0);
+	if (!total){
+		alert("No region-exclusive content detected.");
+		return;
+	}
+	var equipCount = scanResults.reduce((n, r) => n + r.entries.filter(e => e.category === "equipmentBox" || e.category === "palicoEquipmentBox").length, 0);
+	var equipNote = equipCount ? `\n\n${equipCount} of these are equipment/Palico gear entries - a gear slot can't just be left blank, so each will have its id changed to 1 (keeping its type) instead of being removed outright.` : "";
+	var proceed = confirm(`This will permanently remove all ${total} region-exclusive item/equipment/Palico gear entries listed above from this save.${equipNote}\n\nBACK UP YOUR SAVE FILE FIRST (Export save) in case you want to undo this by hand.\n\nA JSON file listing everything removed will also be downloaded, so you can restore it later with "Import removed items/equipment" if you come back to this region.\n\nContinue?`);
+	if (!proceed) return;
+
+	var record = removeExclusiveContent(save);
+	saveJSON(record, `removed_${record.sourceRegion}_exclusive_content.json`);
+	var msg = `Removed ${record.removed.length} region-exclusive entr${record.removed.length === 1 ? "y" : "ies"}. Export your save to keep this change - the downloaded JSON file lets you restore them later if you return to this region.`;
+	alert(msg);
+	openCompatWindow();
+}
+
+var pendingImportJSON = null;
+
 function openCompatWindow(){
+	pendingImportJSON = null;
 	var popup = document.getElementById("popup");
+
+	var scanResults = save ? scanExclusiveContent(save) : [];
+	var totalFound = scanResults.reduce((n, r) => n + r.entries.length, 0);
+	var populatedSlots = [];
+	if (save) for (var i = 0; i < 3; i++) if (save.slots[i]) populatedSlots.push(i);
 
 	var html = `<div class="cat-window">
 		<b>Region-transfer compatibility check</b></br></br>
-		<span>
-			These items/weapons/armor only exist in one region. If a character carries
-			any of these when transferred to the other region (MHGen &harr; MHX), the save
-			can break. Unequip and remove them from your item box, storage box, and
-			Palico/Prowler loadouts <b>before</b> exporting to the other region -
-			this isn't something that can be checked automatically since the item/
-			equipment ID tables haven't been decoded, so go through this list manually in-game.
+		<span style="font-size: 12px; color: grey;">
+			Items/weapons/armor/Palico gear that only exist in one region. If a character carries any of these when transferred to the other region (MHGen &harr; MHX), the save can show them as broken or missing. This scans your currently loaded save's pouch, item box, equipment box, and Palico equipment box directly.
 		</span></br></br>`;
 
+	if (!save){
+		html += `<span>Load or create a save first to scan it.</span></br></br>`;
+	} else if (totalFound === 0){
+		html += `<span style="color: #7fd0a0;">No region-exclusive content detected in any loaded character slot.</span></br></br>`;
+	} else {
+		html += `<button onclick="autoResolveTransfer()">Auto-resolve transfer (remove ${totalFound} item${totalFound === 1 ? "" : "s"})</button>
+			<span style="font-size: 11px; color: grey;"> - back up your save (Export save) first; this downloads a JSON file of everything removed so you can restore it later.</span></br></br>`;
+
+		scanResults.forEach(r => {
+			html += `<u>${escapeHtml(r.name || `Slot ${r.slot + 1}`)}</u></br>`;
+			var byCategory = {};
+			r.entries.forEach(e => { (byCategory[e.category] = byCategory[e.category] || []).push(e); });
+			for (var cat in byCategory){
+				html += `<b>${categoryLabel(cat)}</b></br><span style="font-size: 12px;">${byCategory[cat].map(describeExclusiveEntry).join(", ")}</span></br>`;
+			}
+			html += `</br>`;
+		});
+	}
+
+	if (save){
+		html += `<u>Import removed items/equipment</u></br>
+			<span style="font-size: 12px; color: grey;">
+				Choose a JSON file previously downloaded from "Auto-resolve transfer". Only content matching the currently loaded save's own region can be imported - trying to import MHX-exclusive content into a MHGen save (or vice versa) will be refused. Everything is placed into the next empty slot of the matching box (Pouch- and Item Box-origin items both go into the Item Box; Equipment and Palico Equipment go into their own boxes) - not necessarily back into the original slot.
+			</span></br></br>
+			<button id="import_exclusive_pick_file">Choose JSON file</button>
+			<span id="import_exclusive_file_label" style="margin-left: 8px; font-size: 12px; color: grey;">No file chosen</span></br></br>`;
+
+		if (populatedSlots.length === 0){
+			html += `<span>No populated character slots in this save to import into.</span></br></br>`;
+		} else {
+			html += `<span>Import into slot: </span>
+				<select id="import_exclusive_slot">
+					${populatedSlots.map(i => `<option value="${i}">${escapeHtml(save.save_slots[i].name)}</option>`).join("")}
+				</select></br></br>`;
+		}
+
+		html += `<button id="import_exclusive_go" ${populatedSlots.length === 0 ? "disabled" : ""}>Import</button></br></br>`;
+	}
+
+	html += `<u>Full reference list (all known region-exclusive content)</u></br>`;
 	for (var region in REGION_INCOMPATIBLE_ITEMS){
 		html += `<u>${region}</u></br>`;
 		var categories = REGION_INCOMPATIBLE_ITEMS[region];
@@ -888,6 +994,49 @@ function openCompatWindow(){
 
 	html += `<button onclick="closeWindow()">Close</button></div>`;
 	popup.innerHTML = html;
+
+	if (save){
+		document.getElementById("import_exclusive_pick_file").addEventListener("click", () => {
+			var input = document.createElement("input");
+			input.type = "file";
+			input.accept = ".json";
+			input.onchange = event => {
+				var file = event.target.files[0];
+				if (!file) return;
+				var reader = new FileReader();
+				reader.onload = e => {
+					try {
+						pendingImportJSON = JSON.parse(e.target.result);
+						var count = pendingImportJSON.removed ? pendingImportJSON.removed.length : "?";
+						document.getElementById("import_exclusive_file_label").textContent = `${file.name} (${count} entries, ${pendingImportJSON.sourceRegion || "unknown region"})`;
+					} catch (err){
+						pendingImportJSON = null;
+						alert("Couldn't parse that file as JSON: " + err.message);
+						document.getElementById("import_exclusive_file_label").textContent = "No file chosen";
+					}
+				};
+				reader.readAsText(file);
+			};
+			input.click();
+		});
+
+		document.getElementById("import_exclusive_go").addEventListener("click", () => {
+			if (!pendingImportJSON){
+				alert("Choose a JSON file first.");
+				return;
+			}
+			var destSlot = parseInt(document.getElementById("import_exclusive_slot").value);
+			try {
+				var summary = importRemovedContent(save, destSlot, pendingImportJSON);
+				var msg = `Imported ${summary.imported.length} entr${summary.imported.length === 1 ? "y" : "ies"} into "${save.save_slots[destSlot].name}".`;
+				if (summary.skippedFull.length) msg += `\n\n${summary.skippedFull.length} entr${summary.skippedFull.length === 1 ? "y" : "ies"} skipped - the matching box was full.`;
+				alert(msg);
+				openCompatWindow();
+			} catch (err){
+				alert(err.message);
+			}
+		});
+	}
 
 	document.getElementById("popup-window-overlay").style.display = "block";
 	document.getElementById("popup-window").style.display = "block";
@@ -905,5 +1054,5 @@ window.addEventListener("load", () => {
 	var footer = document.getElementById("footer");
 	var now = new Date();
 	var year = now.getFullYear();
-	footer.innerHTML = `<a href="https://github.com/SilverJolteon/">Style based on SilverJolteon's MHXX-MHGU Save Manager</a> &nbsp;·&nbsp; MHGen/MHX Save Manager ${VERSION} &copy;${year}`;
+	footer.innerHTML = `<a href="https://github.com/SilverJolteon/">Style based on SilverJolteon's MHXX-MHGU Save Manager</a> (<a href="https://silverjolteon.github.io/MHGU/save-manager/index.html">official tool</a>) &nbsp;·&nbsp; MHGen/MHX Save Manager ${VERSION} &copy;${year}`;
 });

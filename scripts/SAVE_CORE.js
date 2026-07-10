@@ -88,6 +88,106 @@ function coreReadU16(data, offset)
     return data[offset] | (data[offset + 1] << 8);
 }
 
+// Character-slot-relative offsets for the pouch/item box/equipment boxes,
+// confirmed against APMMHXSaveEditor's Offsets.cs/Constants.cs and directly
+// against real save files (see EXCLUSIVE_CONTENT.js for the full writeup).
+// Item slots are 18-bit packed (11-bit id | 7-bit qty, id in the low bits);
+// equipment slots are fixed 36-byte records (byte0 = type, bytes1-2 = item
+// id LE, byte3 = level-1, bytes6-11 = 3 decoration slots).
+const POUCH_OFFSET = 0x142E;
+const POUCH_COUNT = 32;
+const ITEM_BOX_OFFSET = 0x290;
+const ITEM_BOX_COUNT = 1400;
+const EQUIPMENT_BOX_OFFSET = 0x4667;
+const EQUIPMENT_BOX_COUNT = 1400;
+const PALICO_EQUIPMENT_OFFSET = 0x10B47;
+const PALICO_EQUIPMENT_COUNT = 700;
+const EQUIPMENT_RECORD_SIZE = 36;
+const ITEM_BIT_WIDTH = 18;
+
+// Single-slot read/modify/write for an 18-bit-packed array (pouch/item box).
+// Unlike MHXX_PORT.js's writePackedArray (which only ORs bits in, safe only
+// when writing into an already-zeroed region), this explicitly clears the
+// target bits first - required here since we edit individual slots in place
+// (both to blank a slot to 0 and to write a nonzero value into one).
+function coreReadPackedSlot(data, offset, index)
+{
+    const bitPos = index * ITEM_BIT_WIDTH;
+    const bytePos = offset + (bitPos >> 3);
+    const bitOff = bitPos & 7;
+    const raw = ((data[bytePos] || 0) | ((data[bytePos + 1] || 0) << 8) | ((data[bytePos + 2] || 0) << 16) | ((data[bytePos + 3] || 0) << 24)) >>> 0;
+    const mask = (1 << ITEM_BIT_WIDTH) - 1;
+    return (raw >>> bitOff) & mask;
+}
+
+function coreWritePackedSlot(data, offset, index, value)
+{
+    const bitPos = index * ITEM_BIT_WIDTH;
+    const bytePos = offset + (bitPos >> 3);
+    const bitOff = bitPos & 7;
+    const mask = (1 << ITEM_BIT_WIDTH) - 1;
+
+    let raw = ((data[bytePos] || 0) | ((data[bytePos + 1] || 0) << 8) | ((data[bytePos + 2] || 0) << 16) | ((data[bytePos + 3] || 0) << 24)) >>> 0;
+    const clearMask = (~(mask << bitOff)) >>> 0;
+    raw = (raw & clearMask) >>> 0;
+    raw = (raw | ((value & mask) << bitOff)) >>> 0;
+
+    data[bytePos] = raw & 0xFF;
+    data[bytePos + 1] = (raw >>> 8) & 0xFF;
+    data[bytePos + 2] = (raw >>> 16) & 0xFF;
+    data[bytePos + 3] = (raw >>> 24) & 0xFF;
+}
+
+function coreReadItemSlot(data, offset, index)
+{
+    const v = coreReadPackedSlot(data, offset, index);
+    return { id: v & 0x7FF, qty: v >>> 11 };
+}
+
+function coreWriteItemSlot(data, offset, index, id, qty)
+{
+    coreWritePackedSlot(data, offset, index, ((qty & 0x7F) << 11) | (id & 0x7FF));
+}
+
+function coreReadEquipmentSlot(data, offset, index)
+{
+    const base = offset + index * EQUIPMENT_RECORD_SIZE;
+    return {
+        type: data[base],
+        id: data[base + 1] | (data[base + 2] << 8),
+        level: data[base + 3],
+        bytes: Array.from(data.subarray(base, base + EQUIPMENT_RECORD_SIZE))
+    };
+}
+
+function coreWriteEquipmentSlotBytes(data, offset, index, bytes)
+{
+    const base = offset + index * EQUIPMENT_RECORD_SIZE;
+    for (let i = 0; i < EQUIPMENT_RECORD_SIZE; i++) data[base + i] = bytes[i] || 0;
+}
+
+// Light-touch fix for a region-exclusive item sitting in ordinary box storage
+// (not currently equipped) - only the 2-byte id field changes, type/level/
+// decorations are left exactly as they were. Confirmed against a real,
+// heavily-populated equipment box (id lands correctly among that type's own
+// catalog of ids, which always starts at id=1) - see EXCLUSIVE_CONTENT.js.
+function coreSetEquipmentId(data, offset, index, id)
+{
+    const base = offset + index * EQUIPMENT_RECORD_SIZE;
+    data[base + 1] = id & 0xFF;
+    data[base + 2] = (id >> 8) & 0xFF;
+}
+
+// APMMHXSaveEditor's Offsets.cs also documents a separate 48-byte
+// "currently equipped" struct per body slot (EQUIPPED_WEAPON_OFFSET etc;
+// that tool defines these but never actually reads/writes them). An earlier
+// version of this feature tried keeping that struct in sync whenever
+// exclusive equipment was removed/replaced, on the theory that it tracks
+// which box entry is worn - but a real before/after reference fix (the
+// user's "Export testing" saves) proved the correct fix leaves this struct
+// completely untouched, even for an exclusive item that byte-for-byte
+// matched one of its fields. Not read or written anywhere in this project.
+
 class MHGenSlotInfo
 {
     constructor(data)
