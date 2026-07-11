@@ -106,8 +106,16 @@ function displayInfo(save){
 	drag_setup();
 }
 
+// Listens to the same "#dropdown" region picker as exportSave(), instead of
+// always building a GEN save - lets "New save" produce a blank MHX save too
+// once the dropdown is showing MHX. The dropdown only exists once a save has
+// been loaded/created at least once (it's rendered by displayInfo(), and #DL
+// starts empty in index.html), so the very first "New save" click ever (no
+// dropdown in the DOM yet) still defaults to GEN.
 function newSave(){
-	save = new MHGenSaveFile(new Uint8Array(CLEAN_MHGEN_SAVE));
+	var dropdown = document.getElementById("dropdown");
+	var targetGame = dropdown ? parseInt(dropdown.value) : 0;
+	save = new MHGenSaveFile(new Uint8Array(targetGame === 1 ? CLEAN_MHX_SAVE : CLEAN_MHGEN_SAVE));
 	save.init();
 	save.readSlots();
 	displayInfo(save);
@@ -299,7 +307,7 @@ function renderGridTable(items, cols, checkboxClass, versionClass, game, transla
 				}
 				if (item.extraName){
 					html += `</br><label style="font-size: 10px;"><input type="checkbox" class="${checkboxClass}-extra" data-key="${item.key}" ${item.extraChecked ? "checked" : ""}>
-						Also add ${escapeHtml(item.extraName)}</label>`;
+						Also add <span class="item-extra-label" data-native-extra="${escapeHtml(item.nativeExtraName || "")}" data-pair-extra="${escapeHtml(item.pairExtraName || "")}">${escapeHtml(item.extraName)}</span></label>`;
 				}
 			}
 			html += `</td>`;
@@ -352,6 +360,14 @@ function flipVersionButton(btn, game){
 	var nameLabel = btn.closest("td").querySelector(".item-name-label");
 	if (nameLabel){
 		nameLabel.textContent = useOther ? btn.dataset.otherLabel : btn.dataset.nativeLabel;
+	}
+
+	// Ranger/Mojave's "also add the other one" checkbox offers whichever
+	// cosmetic twin ISN'T the one now occupying the main slot - flip its
+	// label the same way the main name above just flipped.
+	var extraLabel = btn.closest("td").querySelector(".item-extra-label");
+	if (extraLabel){
+		extraLabel.textContent = useOther ? extraLabel.dataset.pairExtra : extraLabel.dataset.nativeExtra;
 	}
 
 	// Original/Translated only makes sense while MHX (Japanese) content is
@@ -431,6 +447,7 @@ function openDLCWindow(){
 	var sel = getDLCSelection(game);
 	var quests = questsForGame(game);
 	var palicoes = palicoesForGame(game);
+	var otherPalicoes = palicoesForGame(game === 0 ? 1 : 0);
 	var itemPacks = itemPacksForGame(game);
 	var other = otherGameLabel(game);
 
@@ -476,7 +493,14 @@ function openDLCWindow(){
 			pairLabel: p.pairDisplayName, useOther: useOther,
 			hasTranslation: !!p.translatedName, translationVisible: effectiveGame(useOther, !!p.pairPatches, p) === 1,
 			useTranslated: sel.palicoTranslated.has(i), skill: p.skill,
-			extraName: p.extraName, extraChecked: sel.palicoExtra.has(i)
+			// Ranger/Mojave's own "also add the other one" name+patches belong
+			// to whichever list's OWN entry the MAIN slot is currently showing
+			// (same "own vs pair" swap as translated text above) - toggling the
+			// GEN/MHX version button should flip which cosmetic twin gets
+			// offered as the extra, not just the main name.
+			extraName: useOther ? (otherPalicoes[i] && otherPalicoes[i].extraName) : p.extraName,
+			nativeExtraName: p.extraName, pairExtraName: otherPalicoes[i] && otherPalicoes[i].extraName,
+			extraChecked: sel.palicoExtra.has(i)
 		};
 	});
 
@@ -701,10 +725,15 @@ function runDLCInject(){
 			}
 			// Optional "also install the other region's cosmetic twin"
 			// (Ranger/Mojave) - a separate record at its own free slot, not
-			// part of the GEN/MHX version toggle above. Left at the
-			// already-wiped clean-template default when unchecked.
-			if (p.extraPatches && sel.palicoExtra.has(i)){
-				bonusPatches.push(...p.extraPatches);
+			// part of the GEN/MHX version toggle above, EXCEPT that which
+			// twin counts as "the other one" flips along with it: whichever
+			// list's OWN entry is now occupying the main slot (own vs pair,
+			// same as the translated-text handling above) is the one whose
+			// OWN extraPatches/extraName describe the genuinely-missing twin.
+			// Left at the already-wiped clean-template default when unchecked.
+			var extraSource = useOther ? otherPalicoes[i] : p;
+			if (extraSource && extraSource.extraPatches && sel.palicoExtra.has(i)){
+				bonusPatches.push(...extraSource.extraPatches);
 			}
 			anyPalico = true;
 		}
